@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+node_modules/
+dist/
+build/
+m4s/*.gguf
+m4s/*.bin
+m4s/*.onnx
+.DS_Store
+*.dmg
