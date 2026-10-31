@@ -2,23 +2,31 @@ import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { AudioReactiveMetrics, CompanionState } from '../hooks/useLloydSocket';
-import { createAnimeCompanion } from './Character';
+import type { CharacterCustomizationState } from '../types/customization';
+import { createAnimeCompanion, type CharacterController } from './Character';
 
 interface Canvas3DProps {
   companionState: CompanionState;
   audioMetrics: AudioReactiveMetrics;
   micLevel: number;
+  customization: CharacterCustomizationState;
+  isOnboarding: boolean;
 }
 
 export const Canvas3D: React.FC<Canvas3DProps> = ({
   companionState,
   audioMetrics,
   micLevel,
+  customization,
+  isOnboarding,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const stateRef = useRef<CompanionState>(companionState);
   const audioRef = useRef<AudioReactiveMetrics>(audioMetrics);
   const micRef = useRef<number>(micLevel);
+  const customRef = useRef<CharacterCustomizationState>(customization);
+  const onboardingRef = useRef<boolean>(isOnboarding);
+  const companionRef = useRef<CharacterController | null>(null);
   const pointerRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
   useEffect(() => {
@@ -34,12 +42,23 @@ export const Canvas3D: React.FC<Canvas3DProps> = ({
   }, [micLevel]);
 
   useEffect(() => {
+    onboardingRef.current = isOnboarding;
+  }, [isOnboarding]);
+
+  useEffect(() => {
+    customRef.current = customization;
+    if (companionRef.current) {
+      companionRef.current.applyCustomization(customization);
+    }
+  }, [customization]);
+
+  useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x060811);
-    scene.fog = new THREE.FogExp2(0x060811, 0.095);
+    scene.background = new THREE.Color(0x050814);
+    scene.fog = new THREE.FogExp2(0x050814, 0.095);
 
     const camera = new THREE.PerspectiveCamera(
       36,
@@ -47,7 +66,8 @@ export const Canvas3D: React.FC<Canvas3DProps> = ({
       0.1,
       50
     );
-    camera.position.set(0.05, 0.72, 3.25);
+    // Start slightly further out for smooth cinematic zoom-in
+    camera.position.set(0.05, 0.95, 4.15);
 
     const renderer = new THREE.WebGLRenderer({
       antialias: true,
@@ -62,7 +82,6 @@ export const Canvas3D: React.FC<Canvas3DProps> = ({
     container.innerHTML = '';
     container.appendChild(renderer.domElement);
 
-    // Smooth-damped OrbitControls clamped to frame Lloyd in center-right
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.055;
@@ -73,12 +92,15 @@ export const Canvas3D: React.FC<Canvas3DProps> = ({
     controls.maxPolarAngle = 1.66;
     controls.minAzimuthAngle = -0.58;
     controls.maxAzimuthAngle = 0.58;
-    // Offset target slightly left of character (x=0.35) so Lloyd sits in center-right
     controls.target.set(0.14, 0.52, 0);
     controls.update();
 
-    // Lighting Setup (Key Light + Cyan/Magenta Anime Cyber Rim Lights)
-    const ambientLight = new THREE.HemisphereLight(0xcbd5e1, 0x0f172a, 0.85);
+    // Lighting Setup
+    const ambientLight = new THREE.HemisphereLight(
+      0xcbd5e1,
+      0x0f172a,
+      0.85 * customRef.current.roomAmbientIntensity
+    );
     scene.add(ambientLight);
 
     const keyLight = new THREE.DirectionalLight(0xfff7ed, 2.1);
@@ -91,15 +113,27 @@ export const Canvas3D: React.FC<Canvas3DProps> = ({
     keyLight.shadow.bias = -0.0005;
     scene.add(keyLight);
 
-    const cyanRimLight = new THREE.PointLight(0x00f0ff, 3.6, 8);
+    const cyanRimLight = new THREE.PointLight(
+      new THREE.Color(customRef.current.roomRimLightHex),
+      3.6,
+      8
+    );
     cyanRimLight.position.set(-1.6, 1.8, -1.2);
     scene.add(cyanRimLight);
 
-    const magentaRimLight = new THREE.PointLight(0xff2a85, 3.2, 8);
+    const magentaRimLight = new THREE.PointLight(
+      new THREE.Color(customRef.current.auraRingHex),
+      3.2,
+      8
+    );
     magentaRimLight.position.set(2.2, 1.5, -1.4);
     scene.add(magentaRimLight);
 
-    const underGlowLight = new THREE.PointLight(0x00f0ff, 1.5, 4);
+    const underGlowLight = new THREE.PointLight(
+      new THREE.Color(customRef.current.cyberAccentHex),
+      1.5,
+      4
+    );
     underGlowLight.position.set(0.35, -0.8, 0.6);
     scene.add(underGlowLight);
 
@@ -107,10 +141,9 @@ export const Canvas3D: React.FC<Canvas3DProps> = ({
     const envGroup = new THREE.Group();
     scene.add(envGroup);
 
-    // Floor Slab
     const floorGeo = new THREE.CircleGeometry(9, 64);
     const floorMat = new THREE.MeshStandardMaterial({
-      color: 0x090d1a,
+      color: 0x080c18,
       roughness: 0.25,
       metalness: 0.65,
     });
@@ -120,15 +153,14 @@ export const Canvas3D: React.FC<Canvas3DProps> = ({
     floorMesh.receiveShadow = true;
     envGroup.add(floorMesh);
 
-    // Cyber Grid Helper
-    const grid = new THREE.GridHelper(14, 28, 0x00f0ff, 0x1e293b);
+    const grid = new THREE.GridHelper(14, 28, 0x00f2fe, 0x1e293b);
     grid.position.y = -1.045;
     const gridMat = grid.material as THREE.Material;
     gridMat.transparent = true;
-    gridMat.opacity = 0.28;
+    gridMat.opacity = 0.26;
     envGroup.add(grid);
 
-    // Character Cyber Pedestal (at x=0.35)
+    // Character Cyber Pedestal
     const pedestalGeo = new THREE.CylinderGeometry(0.76, 0.86, 0.08, 48);
     const pedestalMat = new THREE.MeshStandardMaterial({
       color: 0x0f172a,
@@ -147,8 +179,12 @@ export const Canvas3D: React.FC<Canvas3DProps> = ({
       roughness: 0.4,
       metalness: 0.7,
     });
-    const neonCyanMat = new THREE.MeshBasicMaterial({ color: 0x00f0ff });
-    const neonMagentaMat = new THREE.MeshBasicMaterial({ color: 0xff2a85 });
+    const neonPrimaryMat = new THREE.MeshBasicMaterial({
+      color: new THREE.Color(customRef.current.cyberAccentHex),
+    });
+    const neonSecondaryMat = new THREE.MeshBasicMaterial({
+      color: new THREE.Color(customRef.current.auraRingHex),
+    });
 
     const pillarPositions = [-2.4, -1.1, 0.35, 1.75, 3.0];
     pillarPositions.forEach((px, idx) => {
@@ -159,13 +195,13 @@ export const Canvas3D: React.FC<Canvas3DProps> = ({
       const trimGeo = new THREE.BoxGeometry(0.025, 4.2, 0.2);
       const trim = new THREE.Mesh(
         trimGeo,
-        idx % 2 === 0 ? neonCyanMat : neonMagentaMat
+        idx % 2 === 0 ? neonPrimaryMat : neonSecondaryMat
       );
       trim.position.set(px + 0.46, 1.1, panel.position.z);
       envGroup.add(trim);
     });
 
-    // Floating Cozy Cyber-Loft Bookshelf / Data Rack on Left Side
+    // Floating Cozy Cyber-Loft Data Rack on Left Side
     const rackGroup = new THREE.Group();
     rackGroup.position.set(-1.35, 0.15, -1.25);
     rackGroup.rotation.y = 0.35;
@@ -178,13 +214,16 @@ export const Canvas3D: React.FC<Canvas3DProps> = ({
       rackGroup.add(shelf);
 
       const holoBarGeo = new THREE.BoxGeometry(0.92, 0.012, 0.015);
-      const holoBar = new THREE.Mesh(holoBarGeo, s % 2 === 0 ? neonCyanMat : neonMagentaMat);
+      const holoBar = new THREE.Mesh(
+        holoBarGeo,
+        s % 2 === 0 ? neonPrimaryMat : neonSecondaryMat
+      );
       holoBar.position.set(0, s * 0.52 - 0.4, 0.165);
       rackGroup.add(holoBar);
     }
 
     // Ambient Floating Cyber Particles
-    const particleCount = 120;
+    const particleCount = 130;
     const positions = new Float32Array(particleCount * 3);
     for (let i = 0; i < particleCount; i++) {
       positions[i * 3] = (Math.random() - 0.5) * 8;
@@ -194,7 +233,7 @@ export const Canvas3D: React.FC<Canvas3DProps> = ({
     const particleGeo = new THREE.BufferGeometry();
     particleGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     const particleMat = new THREE.PointsMaterial({
-      color: 0x38bdf8,
+      color: new THREE.Color(customRef.current.roomRimLightHex),
       size: 0.028,
       transparent: true,
       opacity: 0.55,
@@ -203,10 +242,12 @@ export const Canvas3D: React.FC<Canvas3DProps> = ({
     scene.add(particles);
 
     // Instantiate the 3D Anime Companion (Lloyd)
-    const companion = createAnimeCompanion();
+    const companion = createAnimeCompanion(customRef.current);
+    companionRef.current = companion;
     scene.add(companion.root);
 
-    // Mouse tracking for subtle gaze & head orientation
+    let hasCompletedEntryTransition = false;
+
     const handlePointerMove = (e: PointerEvent) => {
       const rect = container.getBoundingClientRect();
       const nx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
@@ -230,6 +271,15 @@ export const Canvas3D: React.FC<Canvas3DProps> = ({
       const delta = Math.min(0.1, clock.getDelta());
       const elapsed = clock.getElapsedTime();
 
+      // Seamless camera entry transition into cyber-loft once onboarding completes
+      if (!onboardingRef.current && !hasCompletedEntryTransition) {
+        camera.position.z = THREE.MathUtils.lerp(camera.position.z, 3.22, delta * 3.2);
+        camera.position.y = THREE.MathUtils.lerp(camera.position.y, 0.72, delta * 3.2);
+        if (Math.abs(camera.position.z - 3.22) < 0.03) {
+          hasCompletedEntryTransition = true;
+        }
+      }
+
       controls.update();
 
       companion.update(
@@ -241,14 +291,22 @@ export const Canvas3D: React.FC<Canvas3DProps> = ({
         micRef.current
       );
 
-      // Gentle ambient particle drift
+      // Sync room lighting and neon pillars with live customization state
+      const c = customRef.current;
+      ambientLight.intensity = 0.85 * c.roomAmbientIntensity;
+      cyanRimLight.color.set(c.roomRimLightHex);
+      magentaRimLight.color.set(c.auraRingHex);
+      underGlowLight.color.set(c.cyberAccentHex);
+      neonPrimaryMat.color.set(c.cyberAccentHex);
+      neonSecondaryMat.color.set(c.auraRingHex);
+      particleMat.color.set(c.roomRimLightHex);
+
       particles.rotation.y = elapsed * 0.03;
       particles.position.y = Math.sin(elapsed * 0.4) * 0.06;
 
-      // Dynamic rim light intensity during speech
       const voiceBoost = stateRef.current === 'SPEAKING' ? audioRef.current.mouthOpen * 2.2 : 0;
-      cyanRimLight.intensity = 3.4 + voiceBoost;
-      underGlowLight.intensity = 1.4 + voiceBoost * 0.8;
+      cyanRimLight.intensity = (3.4 + voiceBoost) * c.roomAmbientIntensity;
+      underGlowLight.intensity = (1.4 + voiceBoost * 0.8) * c.roomAmbientIntensity;
 
       renderer.render(scene, camera);
       rafId = requestAnimationFrame(animate);
@@ -262,6 +320,7 @@ export const Canvas3D: React.FC<Canvas3DProps> = ({
       window.removeEventListener('resize', handleResize);
       controls.dispose();
       companion.dispose();
+      companionRef.current = null;
       renderer.dispose();
     };
   }, []);

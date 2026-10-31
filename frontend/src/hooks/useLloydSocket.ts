@@ -50,10 +50,43 @@ export interface HardwareTelemetry {
   uptime_seconds: number;
 }
 
+export interface ModelAssetReport {
+  id: string;
+  filename: string;
+  category: 'LLM' | 'STT' | 'TTS';
+  label: string;
+  url: string;
+  expected_bytes: number;
+  size_bytes: number;
+  size_mb: number;
+  expected_mb: number;
+  exists: boolean;
+  source: string;
+  path: string;
+  expected_sha256: string;
+  actual_sha256: string | null;
+  sha256_verified: boolean;
+}
+
+export interface ModelsStatusSnapshot {
+  ready: boolean;
+  needs_onboarding: boolean;
+  app_support_dir: string;
+  fallback_m4s_dir: string;
+  total_installed_mb: number;
+  total_expected_mb: number;
+  system_prompt_path: string;
+  system_prompt_seeded: boolean;
+  assets: ModelAssetReport[];
+}
+
 export interface HealthSnapshot {
   status: string;
   all_checks_passed: boolean;
+  needs_onboarding?: boolean;
   creator: string;
+  repository?: string;
+  license?: string;
   checks: {
     gguf_and_metal: { passed: boolean; detail: string; n_gpu_layers: number };
     whisper_stt_silent_test: { passed: boolean; detail: string };
@@ -65,6 +98,7 @@ export interface HealthSnapshot {
     stt: EngineDiag;
     tts: EngineDiag;
   };
+  models?: ModelsStatusSnapshot;
   system_prompt: string;
   hardware: HardwareTelemetry;
 }
@@ -537,6 +571,29 @@ export function useLloydSocket() {
     }
   }, [stopAllPlayback]);
 
+  const verifyModels = useCallback(async () => {
+    const res = await fetch(`${BACKEND_HTTP}/api/models/verify`, { method: 'POST' });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.health) {
+        setHealth(data.health);
+        setHardware(data.health.hardware);
+      }
+      return data;
+    }
+    return null;
+  }, []);
+
+  const purgeModels = useCallback(async () => {
+    stopAllPlayback();
+    const res = await fetch(`${BACKEND_HTTP}/api/models/purge`, { method: 'POST' });
+    if (res.ok) {
+      await refreshDiagnostics();
+      return await res.json();
+    }
+    return null;
+  }, [refreshDiagnostics, stopAllPlayback]);
+
   return {
     connected,
     companionState,
@@ -554,5 +611,7 @@ export function useLloydSocket() {
     interrupt,
     clearHistory,
     refreshDiagnostics,
+    verifyModels,
+    purgeModels,
   };
 }

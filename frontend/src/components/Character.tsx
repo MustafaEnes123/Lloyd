@@ -1,8 +1,13 @@
 import * as THREE from 'three';
 import type { AudioReactiveMetrics, CompanionState } from '../hooks/useLloydSocket';
+import {
+  DEFAULT_CUSTOMIZATION,
+  type CharacterCustomizationState,
+} from '../types/customization';
 
 export interface CharacterController {
   root: THREE.Group;
+  applyCustomization: (custom: CharacterCustomizationState) => void;
   update: (
     elapsed: number,
     delta: number,
@@ -28,44 +33,46 @@ function createToonGradientTexture(): THREE.DataTexture {
   return texture;
 }
 
-function addCelOutline(
-  mesh: THREE.Mesh,
-  thickness = 1.045,
-  outlineColor = 0x050814
-): THREE.Mesh {
-  const outlineMat = new THREE.MeshBasicMaterial({
-    color: outlineColor,
-    side: THREE.BackSide,
-  });
-  const outlineMesh = new THREE.Mesh(mesh.geometry, outlineMat);
-  outlineMesh.scale.setScalar(thickness);
-  mesh.add(outlineMesh);
-  return outlineMesh;
-}
-
-export function createAnimeCompanion(): CharacterController {
+export function createAnimeCompanion(
+  initialCustomization: CharacterCustomizationState = DEFAULT_CUSTOMIZATION
+): CharacterController {
   const root = new THREE.Group();
   root.position.set(0.35, -1.05, 0);
 
-  const gradientMap = createToonGradientTexture();
+  let currentCustom: CharacterCustomizationState = { ...initialCustomization };
 
-  // Core Toon Materials
+  const gradientMap = createToonGradientTexture();
+  const outlineMaterials: THREE.MeshBasicMaterial[] = [];
+
+  const addCelOutline = (mesh: THREE.Mesh, thickness = 1.045): THREE.Mesh => {
+    const outlineMat = new THREE.MeshBasicMaterial({
+      color: new THREE.Color(currentCustom.outlineHex),
+      side: THREE.BackSide,
+    });
+    outlineMaterials.push(outlineMat);
+    const outlineMesh = new THREE.Mesh(mesh.geometry, outlineMat);
+    outlineMesh.scale.setScalar(thickness);
+    mesh.add(outlineMesh);
+    return outlineMesh;
+  };
+
+  // Core Toon & Emissive Materials
   const skinMat = new THREE.MeshToonMaterial({
     color: 0xffe9dc,
     gradientMap,
   });
   const hairMainMat = new THREE.MeshToonMaterial({
-    color: 0xdbeafe,
+    color: new THREE.Color(currentCustom.hairPrimaryHex),
     gradientMap,
   });
   const hairAccentMat = new THREE.MeshToonMaterial({
-    color: 0x38bdf8,
-    emissive: 0x0369a1,
+    color: new THREE.Color(currentCustom.hairAccentHex),
+    emissive: new THREE.Color(currentCustom.hairAccentHex),
     emissiveIntensity: 0.35,
     gradientMap,
   });
   const jacketMat = new THREE.MeshToonMaterial({
-    color: 0x111827,
+    color: new THREE.Color(currentCustom.outfitJacketHex),
     gradientMap,
   });
   const innerShirtMat = new THREE.MeshToonMaterial({
@@ -73,15 +80,15 @@ export function createAnimeCompanion(): CharacterController {
     gradientMap,
   });
   const cyberTrimMat = new THREE.MeshStandardMaterial({
-    color: 0x00f0ff,
-    emissive: 0x00f0ff,
-    emissiveIntensity: 1.4,
+    color: new THREE.Color(currentCustom.cyberAccentHex),
+    emissive: new THREE.Color(currentCustom.cyberAccentHex),
+    emissiveIntensity: currentCustom.eyeLuminescence,
     roughness: 0.2,
     metalness: 0.8,
   });
-  const magentaTrimMat = new THREE.MeshStandardMaterial({
-    color: 0xff2a85,
-    emissive: 0xff2a85,
+  const secondaryTrimMat = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(currentCustom.auraRingHex),
+    emissive: new THREE.Color(currentCustom.auraRingHex),
     emissiveIntensity: 1.2,
     roughness: 0.25,
     metalness: 0.7,
@@ -106,7 +113,7 @@ export function createAnimeCompanion(): CharacterController {
   // High Cyber Collar
   const collarGeo = new THREE.CylinderGeometry(0.24, 0.26, 0.18, 16, 1, true);
   const collarMat = new THREE.MeshToonMaterial({
-    color: 0x0f172a,
+    color: new THREE.Color(currentCustom.outfitJacketHex),
     side: THREE.DoubleSide,
     gradientMap,
   });
@@ -114,7 +121,7 @@ export function createAnimeCompanion(): CharacterController {
   collarMesh.position.set(0, 0.73, -0.01);
   torsoGroup.add(collarMesh);
 
-  // Glowing Chest Reactor Core (Enes Custom Neural Core Emblem)
+  // Glowing Chest Reactor Core (Enes Custom Neural Spark Emblem)
   const coreOuterGeo = new THREE.OctahedronGeometry(0.085, 1);
   const coreMesh = new THREE.Mesh(coreOuterGeo, cyberTrimMat);
   coreMesh.position.set(0, 0.46, 0.24);
@@ -185,10 +192,24 @@ export function createAnimeCompanion(): CharacterController {
   leftCuff.rotation.y = Math.PI / 2;
   headGroup.add(leftCuff);
 
-  const rightCuff = new THREE.Mesh(cuffGeo, magentaTrimMat);
+  const rightCuff = new THREE.Mesh(cuffGeo, secondaryTrimMat);
   rightCuff.position.set(0.29, 0.01, -0.01);
   rightCuff.rotation.y = Math.PI / 2;
   headGroup.add(rightCuff);
+
+  // Shared Iris Materials so customization updates both eyes seamlessly
+  const irisBaseMat = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(currentCustom.eyeIrisHex),
+    emissive: new THREE.Color(currentCustom.eyeIrisHex),
+    emissiveIntensity: currentCustom.eyeLuminescence * 0.55,
+    roughness: 0.15,
+  });
+  const irisGlowMat = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(currentCustom.eyeIrisHex),
+    emissive: new THREE.Color(currentCustom.eyeIrisHex),
+    emissiveIntensity: currentCustom.eyeLuminescence,
+    roughness: 0.1,
+  });
 
   // Expressive Anime Eyes (Left & Right)
   const createAnimeEye = (side: -1 | 1) => {
@@ -196,30 +217,24 @@ export function createAnimeCompanion(): CharacterController {
     eyeGroup.position.set(side * 0.105, 0.025, 0.248);
     eyeGroup.rotation.y = side * 0.16;
 
-    // Sclera
     const scleraGeo = new THREE.SphereGeometry(0.058, 18, 16);
     scleraGeo.scale(1.12, 1.25, 0.35);
     const scleraMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
     const sclera = new THREE.Mesh(scleraGeo, scleraMat);
     eyeGroup.add(sclera);
 
-    // Vibrant Cyan/Indigo Iris
     const irisGroup = new THREE.Group();
     const irisGeo = new THREE.CircleGeometry(0.044, 24);
-    const irisMat = new THREE.MeshBasicMaterial({ color: 0x0284c7 });
-    const iris = new THREE.Mesh(irisGeo, irisMat);
+    const iris = new THREE.Mesh(irisGeo, irisBaseMat);
     iris.position.z = 0.021;
     iris.scale.set(0.95, 1.15, 1);
     irisGroup.add(iris);
 
-    // Lower Glowing Cyan Iris Crescent
     const glowIrisGeo = new THREE.CircleGeometry(0.034, 20);
-    const glowIrisMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
-    const glowIris = new THREE.Mesh(glowIrisGeo, glowIrisMat);
+    const glowIris = new THREE.Mesh(glowIrisGeo, irisGlowMat);
     glowIris.position.set(0, -0.006, 0.022);
     irisGroup.add(glowIris);
 
-    // Dark Pupil
     const pupilGeo = new THREE.CircleGeometry(0.019, 16);
     const pupilMat = new THREE.MeshBasicMaterial({ color: 0x090d16 });
     const pupil = new THREE.Mesh(pupilGeo, pupilMat);
@@ -241,7 +256,6 @@ export function createAnimeCompanion(): CharacterController {
 
     eyeGroup.add(irisGroup);
 
-    // Upper Eyelash Line
     const lashGeo = new THREE.BoxGeometry(0.115, 0.016, 0.02);
     const lashMat = new THREE.MeshBasicMaterial({ color: 0x0f172a });
     const lash = new THREE.Mesh(lashGeo, lashMat);
@@ -249,7 +263,6 @@ export function createAnimeCompanion(): CharacterController {
     lash.rotation.z = -side * 0.06;
     eyeGroup.add(lash);
 
-    // Blink Eyelid Cover
     const lidGeo = new THREE.SphereGeometry(0.061, 16, 14);
     lidGeo.scale(1.15, 1.28, 0.38);
     const lidMesh = new THREE.Mesh(lidGeo, skinMat);
@@ -258,7 +271,6 @@ export function createAnimeCompanion(): CharacterController {
     lidMesh.visible = false;
     eyeGroup.add(lidMesh);
 
-    // Expressive Eyebrow
     const browGeo = new THREE.BoxGeometry(0.11, 0.014, 0.018);
     const browMat = new THREE.MeshBasicMaterial({ color: 0x475569 });
     const brow = new THREE.Mesh(browGeo, browMat);
@@ -290,7 +302,6 @@ export function createAnimeCompanion(): CharacterController {
   mouthCavity.scale.set(0.8, 0.05, 1);
   mouthGroup.add(mouthCavity);
 
-  // Tongue accent inside mouth cavity
   const tongueGeo = new THREE.SphereGeometry(0.022, 12, 10);
   const tongueMat = new THREE.MeshBasicMaterial({ color: 0xf43f5e });
   const tongueMesh = new THREE.Mesh(tongueGeo, tongueMat);
@@ -301,7 +312,6 @@ export function createAnimeCompanion(): CharacterController {
   const hairGroup = new THREE.Group();
   headGroup.add(hairGroup);
 
-  // Hair Base Cap
   const hairCapGeo = new THREE.SphereGeometry(0.308, 24, 20);
   hairCapGeo.scale(0.98, 1.05, 1.0);
   const hairCap = new THREE.Mesh(hairCapGeo, hairMainMat);
@@ -309,7 +319,6 @@ export function createAnimeCompanion(): CharacterController {
   addCelOutline(hairCap, 1.03);
   hairGroup.add(hairCap);
 
-  // Procedural Spiky Anime Hair Locks (Front bangs, side swept locks, crown spikes)
   const hairSpikes: { mesh: THREE.Mesh; baseRotZ: number; baseRotX: number; phase: number }[] = [];
   const createHairSpike = (
     radius: number,
@@ -335,18 +344,13 @@ export function createAnimeCompanion(): CharacterController {
     });
   };
 
-  // Forehead Bangs
   createHairSpike(0.068, 0.27, [0.0, 0.27, 0.23], [0.22, 0, -0.08], true);
   createHairSpike(0.062, 0.25, [-0.085, 0.26, 0.21], [0.2, 0, 0.22], false);
   createHairSpike(0.062, 0.26, [0.09, 0.26, 0.21], [0.2, 0, -0.24], false);
   createHairSpike(0.058, 0.29, [-0.18, 0.22, 0.16], [0.15, 0.2, 0.35], true);
   createHairSpike(0.058, 0.29, [0.18, 0.22, 0.16], [0.15, -0.2, -0.35], false);
-
-  // Side Framing Locks
   createHairSpike(0.065, 0.34, [-0.25, 0.14, 0.08], [0.08, 0.3, 0.28], false);
   createHairSpike(0.065, 0.34, [0.25, 0.14, 0.08], [0.08, -0.3, -0.28], true);
-
-  // Crown & Back Anime Spikes
   createHairSpike(0.085, 0.32, [0.0, 0.35, -0.02], [-2.4, 0, 0.15], false);
   createHairSpike(0.08, 0.3, [-0.14, 0.33, -0.06], [-2.2, 0.3, 0.45], true);
   createHairSpike(0.08, 0.3, [0.14, 0.33, -0.06], [-2.2, -0.3, -0.45], false);
@@ -360,20 +364,17 @@ export function createAnimeCompanion(): CharacterController {
     shoulderGroup.position.set(side * 0.31, 0.63, 0);
     torsoGroup.add(shoulderGroup);
 
-    // Shoulder Pauldron Accent
     const pauldronGeo = new THREE.SphereGeometry(0.085, 14, 12);
     const pauldron = new THREE.Mesh(pauldronGeo, jacketMat);
     addCelOutline(pauldron, 1.05);
     shoulderGroup.add(pauldron);
 
-    // Upper Arm
     const upperArmGeo = new THREE.CylinderGeometry(0.068, 0.058, 0.34, 12);
     const upperArm = new THREE.Mesh(upperArmGeo, jacketMat);
     upperArm.position.set(0, -0.17, 0);
     addCelOutline(upperArm, 1.05);
     shoulderGroup.add(upperArm);
 
-    // Elbow & Forearm Group
     const elbowGroup = new THREE.Group();
     elbowGroup.position.set(0, -0.34, 0);
     shoulderGroup.add(elbowGroup);
@@ -384,14 +385,12 @@ export function createAnimeCompanion(): CharacterController {
     addCelOutline(forearm, 1.05);
     elbowGroup.add(forearm);
 
-    // Glowing Cyber Wristband
     const wristGeo = new THREE.TorusGeometry(0.05, 0.009, 8, 18);
     const wristBand = new THREE.Mesh(wristGeo, cyberTrimMat);
     wristBand.rotation.x = Math.PI / 2;
     wristBand.position.set(0, -0.28, 0);
     elbowGroup.add(wristBand);
 
-    // Hand
     const handGeo = new THREE.SphereGeometry(0.052, 12, 12);
     handGeo.scale(0.85, 1.15, 0.65);
     const hand = new THREE.Mesh(handGeo, skinMat);
@@ -405,7 +404,6 @@ export function createAnimeCompanion(): CharacterController {
   const leftArm = createArm(-1);
   const rightArm = createArm(1);
 
-  // Lower Body / Legs standing on pedestal
   const pelvisGeo = new THREE.CylinderGeometry(0.21, 0.19, 0.22, 14);
   const pelvisMesh = new THREE.Mesh(pelvisGeo, innerShirtMat);
   pelvisMesh.position.set(0, -0.08, 0);
@@ -431,47 +429,44 @@ export function createAnimeCompanion(): CharacterController {
   const haloRing = new THREE.Mesh(haloRingGeo, cyberTrimMat);
   haloGroup.add(haloRing);
 
-  // 6 Floating Energy Shards around Halo
-  const shards: THREE.Mesh[] = [];
   const shardGeo = new THREE.OctahedronGeometry(0.032, 0);
   for (let i = 0; i < 6; i++) {
     const angle = (i / 6) * Math.PI * 2;
-    const shard = new THREE.Mesh(shardGeo, i % 2 === 0 ? cyberTrimMat : magentaTrimMat);
+    const shard = new THREE.Mesh(shardGeo, i % 2 === 0 ? cyberTrimMat : secondaryTrimMat);
     shard.position.set(Math.cos(angle) * 0.46, Math.sin(angle) * 0.46, 0);
     shard.scale.set(0.6, 1.8, 0.6);
     shard.rotation.z = angle;
     haloGroup.add(shard);
-    shards.push(shard);
   }
 
-  // Base Glowing Telemetry Ring (pulses during LISTENING / SPEAKING)
+  // Base Glowing Telemetry Aura Ring
   const baseRingGroup = new THREE.Group();
   baseRingGroup.position.set(0, 0.03, 0);
   root.add(baseRingGroup);
 
   const baseRingGeo = new THREE.RingGeometry(0.56, 0.61, 64);
   const baseRingMat = new THREE.MeshBasicMaterial({
-    color: 0x00f0ff,
+    color: new THREE.Color(currentCustom.auraRingHex),
     side: THREE.DoubleSide,
     transparent: true,
-    opacity: 0.45,
+    opacity: 0.5,
   });
   const baseRing = new THREE.Mesh(baseRingGeo, baseRingMat);
   baseRing.rotation.x = -Math.PI / 2;
   baseRingGroup.add(baseRing);
 
-  const outerPulseGeo = new THREE.RingGeometry(0.66, 0.685, 64);
+  const outerPulseGeo = new THREE.RingGeometry(0.66, 0.688, 64);
   const outerPulseMat = new THREE.MeshBasicMaterial({
-    color: 0xff2a85,
+    color: new THREE.Color(currentCustom.cyberAccentHex),
     side: THREE.DoubleSide,
     transparent: true,
-    opacity: 0.25,
+    opacity: 0.3,
   });
   const outerPulseRing = new THREE.Mesh(outerPulseGeo, outerPulseMat);
   outerPulseRing.rotation.x = -Math.PI / 2;
   baseRingGroup.add(outerPulseRing);
 
-  // Orbiting Thinking Particle Ring (active during THINKING state)
+  // Orbiting Thinking Particle Ring
   const thinkingGroup = new THREE.Group();
   thinkingGroup.position.set(0, 2.25, 0);
   root.add(thinkingGroup);
@@ -479,16 +474,48 @@ export function createAnimeCompanion(): CharacterController {
   const orbitNodes: THREE.Mesh[] = [];
   const nodeGeo = new THREE.OctahedronGeometry(0.028, 0);
   for (let i = 0; i < 8; i++) {
-    const node = new THREE.Mesh(nodeGeo, i % 2 === 0 ? cyberTrimMat : magentaTrimMat);
+    const node = new THREE.Mesh(nodeGeo, i % 2 === 0 ? cyberTrimMat : secondaryTrimMat);
     const a = (i / 8) * Math.PI * 2;
     node.position.set(Math.cos(a) * 0.48, Math.sin(a * 2) * 0.06, Math.sin(a) * 0.48);
     thinkingGroup.add(node);
     orbitNodes.push(node);
   }
 
-  // Blink state tracking (random blinks every 3-6 seconds)
+  // Real-time Customization Updater
+  const applyCustomization = (custom: CharacterCustomizationState) => {
+    currentCustom = { ...custom };
+    hairMainMat.color.set(custom.hairPrimaryHex);
+    hairAccentMat.color.set(custom.hairAccentHex);
+    hairAccentMat.emissive.set(custom.hairAccentHex);
+
+    irisBaseMat.color.set(custom.eyeIrisHex);
+    irisBaseMat.emissive.set(custom.eyeIrisHex);
+    irisBaseMat.emissiveIntensity = custom.eyeLuminescence * 0.55;
+
+    irisGlowMat.color.set(custom.eyeIrisHex);
+    irisGlowMat.emissive.set(custom.eyeIrisHex);
+    irisGlowMat.emissiveIntensity = custom.eyeLuminescence;
+
+    jacketMat.color.set(custom.outfitJacketHex);
+    collarMat.color.set(custom.outfitJacketHex);
+
+    cyberTrimMat.color.set(custom.cyberAccentHex);
+    cyberTrimMat.emissive.set(custom.cyberAccentHex);
+    cyberTrimMat.emissiveIntensity = custom.eyeLuminescence;
+
+    secondaryTrimMat.color.set(custom.auraRingHex);
+    secondaryTrimMat.emissive.set(custom.auraRingHex);
+
+    baseRingMat.color.set(custom.auraRingHex);
+    outerPulseMat.color.set(custom.cyberAccentHex);
+
+    outlineMaterials.forEach((mat) => {
+      mat.color.set(custom.outlineHex);
+    });
+  };
+
   let nextBlinkTime = 2.8;
-  let blinkDuration = 0.14;
+  const blinkDuration = 0.14;
 
   const update = (
     elapsed: number,
@@ -498,6 +525,8 @@ export function createAnimeCompanion(): CharacterController {
     pointer: { x: number; y: number },
     micLevel: number
   ) => {
+    const auraFreq = currentCustom.auraFrequency || 1.2;
+
     // 1. Subtle Breathing & Posture
     const breath = Math.sin(elapsed * 2.1) * 0.016;
     torsoGroup.position.y = breath;
@@ -518,7 +547,7 @@ export function createAnimeCompanion(): CharacterController {
       rightEye.lidMesh.scale.y = lidScale;
     }
 
-    // 3. State-Driven Head, Eye, Brow, Arm, and Ring Animations
+    // 3. State-Driven Animations
     let targetHeadRotX = -pointer.y * 0.18 + Math.sin(elapsed * 0.9) * 0.03;
     let targetHeadRotY = pointer.x * 0.28 + Math.cos(elapsed * 0.6) * 0.04;
     let targetHeadRotZ = Math.sin(elapsed * 0.7) * 0.035;
@@ -534,7 +563,6 @@ export function createAnimeCompanion(): CharacterController {
     let rightElbowX = -0.25;
 
     if (state === 'LISTENING') {
-      // Perks up, head cocks slightly, eyes widen, glowing base ring pulses
       targetHeadRotZ = 0.12 + Math.sin(elapsed * 2.5) * 0.025;
       targetHeadRotX = -0.05 - micLevel * 0.08;
       targetEyeScaleY = 1.14 + micLevel * 0.12;
@@ -546,14 +574,13 @@ export function createAnimeCompanion(): CharacterController {
       leftElbowX = -0.42;
       rightElbowX = -0.42;
 
-      const pulse = 1.0 + Math.sin(elapsed * 7.5) * 0.12 + micLevel * 0.35;
+      const pulse = 1.0 + Math.sin(elapsed * 6.5 * auraFreq) * 0.12 + micLevel * 0.35;
       baseRing.scale.setScalar(pulse);
       baseRingMat.color.setHex(0x10b981);
-      baseRingMat.opacity = 0.75 + Math.sin(elapsed * 8) * 0.2;
-      outerPulseRing.scale.setScalar(1.05 + Math.cos(elapsed * 6) * 0.15);
+      baseRingMat.opacity = 0.75 + Math.sin(elapsed * 8 * auraFreq) * 0.2;
+      outerPulseRing.scale.setScalar(1.05 + Math.cos(elapsed * 5.5 * auraFreq) * 0.15);
       outerPulseMat.opacity = 0.55;
     } else if (state === 'THINKING') {
-      // Glances upward and ponders, floating particle ring orbits
       targetHeadRotX = -0.16 + Math.sin(elapsed * 2.0) * 0.03;
       targetHeadRotY = 0.18 * Math.sin(elapsed * 1.1);
       targetHeadRotZ = -0.08;
@@ -564,12 +591,11 @@ export function createAnimeCompanion(): CharacterController {
       rightShoulderZ = -0.08;
       rightElbowX = -1.35;
 
-      baseRing.scale.setScalar(1.0 + Math.sin(elapsed * 4.0) * 0.06);
+      baseRing.scale.setScalar(1.0 + Math.sin(elapsed * 4.0 * auraFreq) * 0.06);
       baseRingMat.color.setHex(0xa855f7);
-      baseRingMat.opacity = 0.65;
+      baseRingMat.opacity = 0.68;
       outerPulseMat.opacity = 0.45;
     } else if (state === 'SPEAKING') {
-      // Expressive head & hand gestures synced to voice cadence
       const voiceAmp = audio.mouthOpen;
       targetHeadRotX = -pointer.y * 0.12 - voiceAmp * 0.09 + Math.sin(elapsed * 4.2) * 0.03;
       targetHeadRotY = pointer.x * 0.2 + Math.sin(elapsed * 2.4) * 0.07;
@@ -586,17 +612,17 @@ export function createAnimeCompanion(): CharacterController {
 
       const speakPulse = 1.0 + voiceAmp * 0.28;
       baseRing.scale.setScalar(speakPulse);
-      baseRingMat.color.setHex(0x00f0ff);
+      baseRingMat.color.set(currentCustom.auraRingHex);
       baseRingMat.opacity = 0.6 + voiceAmp * 0.38;
       outerPulseRing.scale.setScalar(1.0 + audio.lowEnergy * 0.32);
       outerPulseMat.opacity = 0.35 + voiceAmp * 0.4;
     } else {
-      // IDLE state
-      baseRing.scale.setScalar(1.0 + Math.sin(elapsed * 2.0) * 0.03);
-      baseRingMat.color.setHex(0x00f0ff);
-      baseRingMat.opacity = 0.36;
-      outerPulseRing.scale.setScalar(1.0 + Math.cos(elapsed * 1.6) * 0.03);
-      outerPulseMat.opacity = 0.18;
+      baseRing.scale.setScalar(1.0 + Math.sin(elapsed * 2.0 * auraFreq) * 0.04);
+      baseRingMat.color.set(currentCustom.auraRingHex);
+      baseRingMat.opacity = 0.42;
+      outerPulseRing.scale.setScalar(1.0 + Math.cos(elapsed * 1.6 * auraFreq) * 0.04);
+      outerPulseMat.opacity = 0.22;
+      baseRingGroup.rotation.y = elapsed * 0.4 * auraFreq;
     }
 
     const lerpFactor = Math.min(1, delta * 8.5);
@@ -604,7 +630,6 @@ export function createAnimeCompanion(): CharacterController {
     headGroup.rotation.y = THREE.MathUtils.lerp(headGroup.rotation.y, targetHeadRotY, lerpFactor);
     headGroup.rotation.z = THREE.MathUtils.lerp(headGroup.rotation.z, targetHeadRotZ, lerpFactor);
 
-    // Subtle iris tracking toward cursor
     const irisOffsetX = THREE.MathUtils.clamp(pointer.x * 0.012, -0.012, 0.012);
     const irisOffsetY = THREE.MathUtils.clamp(pointer.y * 0.01, -0.01, 0.01);
     leftEye.irisGroup.position.x = THREE.MathUtils.lerp(leftEye.irisGroup.position.x, irisOffsetX, lerpFactor);
@@ -653,9 +678,13 @@ export function createAnimeCompanion(): CharacterController {
     }
 
     // 7. Cyber Halo & Thinking Particle Orbit
-    haloGroup.rotation.z = elapsed * 0.35;
+    haloGroup.rotation.z = elapsed * 0.35 * auraFreq;
     coreMesh.rotation.y = elapsed * 1.4;
-    const coreGlow = state === 'SPEAKING' ? 1.8 + audio.mouthOpen * 1.5 : 1.2 + Math.sin(elapsed * 3) * 0.25;
+    const baseLum = currentCustom.eyeLuminescence;
+    const coreGlow =
+      state === 'SPEAKING'
+        ? baseLum * 1.3 + audio.mouthOpen * 1.4
+        : baseLum + Math.sin(elapsed * 3 * auraFreq) * 0.25;
     cyberTrimMat.emissiveIntensity = coreGlow;
 
     const showThinkingOrbit = state === 'THINKING';
@@ -684,5 +713,5 @@ export function createAnimeCompanion(): CharacterController {
     });
   };
 
-  return { root, update, dispose };
+  return { root, applyCustomization, update, dispose };
 }

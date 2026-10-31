@@ -1,13 +1,23 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Canvas3D } from './components/Canvas3D';
 import { DiagnosticBar } from './components/DiagnosticBar';
+import { OnboardingModal } from './components/OnboardingModal';
 import { SettingsModal } from './components/SettingsModal';
 import { SubtitleOverlay } from './components/SubtitleOverlay';
 import { useLloydSocket, type VoiceInputMode } from './hooks/useLloydSocket';
 import { useVoiceLoop } from './hooks/useVoiceLoop';
+import {
+  loadCustomizationState,
+  saveCustomizationState,
+  type CharacterCustomizationState,
+} from './types/customization';
 
 export const App: React.FC = () => {
   const [voiceMode, setVoiceMode] = useState<VoiceInputMode>('vad');
+  const [customization, setCustomization] = useState<CharacterCustomizationState>(() =>
+    loadCustomizationState()
+  );
+  const [manualOnboardingOpen, setManualOnboardingOpen] = useState<boolean>(false);
 
   const {
     connected,
@@ -24,6 +34,8 @@ export const App: React.FC = () => {
     interrupt,
     clearHistory,
     refreshDiagnostics,
+    verifyModels,
+    purgeModels,
   } = useLloydSocket();
 
   const {
@@ -40,23 +52,42 @@ export const App: React.FC = () => {
     onPttRelease: releasePushToTalk,
   });
 
+  useEffect(() => {
+    saveCustomizationState(customization);
+  }, [customization]);
+
+  const isOnboardingOpen =
+    manualOnboardingOpen || Boolean(health?.needs_onboarding);
+
+  const handleOnboardingComplete = () => {
+    setManualOnboardingOpen(false);
+    refreshDiagnostics();
+  };
+
   return (
-    <main className="relative w-screen h-screen overflow-hidden bg-[#060811] select-none">
+    <main className="relative w-screen h-screen overflow-hidden bg-[#050814] select-none">
       {/* 3D Anime Companion & Cyber-Loft Simulation Scene */}
       <Canvas3D
         companionState={companionState}
         audioMetrics={audioMetrics}
         micLevel={micLevel}
+        customization={customization}
+        isOnboarding={isOnboardingOpen}
       />
 
-      {/* Top-Left Frosted-Glass Settings & Diagnostic Inspector */}
+      {/* Top-Left Floating Glass Navigation, Styling Studio & 4-Tab Settings Modal */}
       <SettingsModal
         health={health}
         hardware={hardware}
         voiceMode={voiceMode}
+        customization={customization}
+        onCustomizationChange={setCustomization}
         onVoiceModeChange={setVoiceMode}
         onRefreshDiagnostics={refreshDiagnostics}
         onClearHistory={clearHistory}
+        onVerifyModels={verifyModels}
+        onPurgeModels={purgeModels}
+        onOpenOnboarding={() => setManualOnboardingOpen(true)}
       />
 
       {/* Top-Right Live Hardware, STT, LLM, TTS Status Bar */}
@@ -71,7 +102,7 @@ export const App: React.FC = () => {
         onInterrupt={interrupt}
       />
 
-      {/* Bottom-Center Live Cinematic Subtitles, Audio Visualizer, and Input Bar */}
+      {/* Bottom-Center Floating Neural Expressive Subtitle & Dialogue Dock */}
       <SubtitleOverlay
         liveSubtitle={liveSubtitle}
         lastUserTranscript={lastUserTranscript}
@@ -83,6 +114,12 @@ export const App: React.FC = () => {
         onSendText={sendText}
         onPttDown={beginPushToTalk}
         onPttUp={endPushToTalk}
+      />
+
+      {/* Automated Onboarding & Asset Download Wizard */}
+      <OnboardingModal
+        isOpen={isOnboardingOpen}
+        onComplete={handleOnboardingComplete}
       />
     </main>
   );

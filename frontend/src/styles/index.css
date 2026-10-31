@@ -15,48 +15,89 @@
     margin: 0;
     padding: 0;
     overflow: hidden;
-    background-color: #060811;
+    background-color: #050814;
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", system-ui, sans-serif;
   }
 }
 
-/* Custom macOS Vibrancy & Frosted Glass Surfaces */
+/* Google Gemini-Inspired Neural Expressive Glassmorphism */
 .glass-panel {
-  background: rgba(11, 16, 30, 0.72);
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  background: linear-gradient(
+    145deg,
+    rgba(255, 255, 255, 0.065) 0%,
+    rgba(10, 16, 34, 0.78) 55%,
+    rgba(5, 8, 20, 0.88) 100%
+  );
+  backdrop-filter: blur(28px) saturate(190%);
+  -webkit-backdrop-filter: blur(28px) saturate(190%);
   border: 1px solid rgba(255, 255, 255, 0.11);
   box-shadow:
-    0 20px 50px rgba(0, 0, 0, 0.65),
-    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    0 24px 64px rgba(0, 0, 0, 0.72),
+    0 0 40px rgba(0, 242, 254, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14);
 }
 
 .glass-pill {
-  background: rgba(14, 21, 38, 0.66);
-  backdrop-filter: blur(18px) saturate(170%);
-  -webkit-backdrop-filter: blur(18px) saturate(170%);
-  border: 1px solid rgba(0, 240, 255, 0.18);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.07) 0%,
+    rgba(13, 20, 40, 0.74) 100%
+  );
+  backdrop-filter: blur(22px) saturate(180%);
+  -webkit-backdrop-filter: blur(22px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  box-shadow:
+    0 10px 32px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
-/* Subtle custom scrollbars for Persona Inspector */
+.tactile-btn {
+  transition:
+    transform 0.24s cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 0.24s cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 0.24s ease,
+    background-color 0.24s ease;
+}
+
+.tactile-btn:hover {
+  transform: translateY(-1px) scale(1.015);
+}
+
+.tactile-btn:active {
+  transform: translateY(0px) scale(0.985);
+}
+
+.neural-gradient-text {
+  background: linear-gradient(90deg, #00f2fe 0%, #4facfe 50%, #a855f7 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.neural-glow-border {
+  border-color: rgba(0, 242, 254, 0.38);
+  box-shadow:
+    0 0 24px rgba(0, 242, 254, 0.18),
+    inset 0 0 12px rgba(79, 172, 254, 0.12);
+}
+
+/* Custom sleek scrollbars */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: rgba(15, 23, 42, 0.4);
+  background: rgba(15, 23, 42, 0.35);
   border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(56, 189, 248, 0.35);
+  background: rgba(79, 172, 254, 0.35);
   border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(56, 189, 248, 0.6);
+  background: rgba(0, 242, 254, 0.65);
 }
 
 @keyframes wordFadeIn {
@@ -74,4 +115,19 @@
 
 .animate-word-fade {
   animation: wordFadeIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes neuralPulse {
+  0%, 100% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.04);
+  }
+}
+
+.animate-neural-pulse {
+  animation: neuralPulse 2.8s ease-in-out infinite;
 }

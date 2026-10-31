@@ -16,13 +16,14 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from downloader import download_manager
 from hardware import watchdog
 
 logger = logging.getLogger("lloyd.stt")
 
 BASE_DIR = Path("/Users/mustafaeneskayaci/Documents/coding_projects/Lloyd")
 M4S_DIR = BASE_DIR / "m4s"
-DEFAULT_WHISPER_PATH = M4S_DIR / "ggml-tiny.en.bin"
+DEFAULT_WHISPER_PATH = download_manager.resolve_asset_path("ggml-tiny.en.bin")
 
 try:
     import webrtcvad
@@ -171,6 +172,7 @@ class STTEngine:
         self.sample_rate: int = 16000
 
     def validate_model_file(self) -> Tuple[bool, str]:
+        self.model_path = download_manager.resolve_asset_path("ggml-tiny.en.bin")
         if not self.model_path.exists():
             return False, f"Missing Whisper model at {self.model_path}"
         if not os.access(self.model_path, os.R_OK):

@@ -1,6 +1,7 @@
 """
-FastAPI / Uvicorn Inference Daemon & WebSocket Orchestrator for Project Lloyd (backend/app.py).
+FastAPI / Uvicorn Inference Daemon & WebSocket Orchestrator for Project Lloyd V2 (backend/app.py).
 Coordinates:
+  - Automated Onboarding & Model Asset Downloader (~/Library/Application Support/Lloyd/models + ./m4s)
   - LLM Thinking Engine (llama-cpp-python + Apple Silicon Metal)
   - STT Engine (pywhispercpp + WebRTC/RMS VAD 800ms silence detection)
   - TTS Engine (onnxruntime Piper 22050Hz synthesis + amplitude envelopes)
@@ -21,17 +22,17 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-from fastapi import FastAPI, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-# Ensure backend directory is importable regardless of working directory
 BACKEND_DIR = Path(__file__).resolve().parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from downloader import download_manager
 from engine_llm import DEFAULT_MODEL_PATH, DEFAULT_PROMPT_PATH, LLMEngine
 from engine_stt import DEFAULT_WHISPER_PATH, STTEngine, VoiceActivityDetector
 from engine_tts import DEFAULT_CONFIG_PATH, DEFAULT_ONNX_PATH, TTSEngine
@@ -43,7 +44,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("lloyd.daemon")
 
-# Global Engine Singletons
 llm_engine = LLMEngine(
     model_path=DEFAULT_MODEL_PATH,
     prompt_path=DEFAULT_PROMPT_PATH,
@@ -62,15 +62,27 @@ startup_diagnostics: Dict[str, Any] = {}
 
 def run_startup_self_check() -> Dict[str, Any]:
     """
-    Execute the 4-part Diagnostic Self-Check Protocol at application startup:
+    Execute the 4-part Diagnostic Self-Check Protocol:
       1. Integrity of .gguf file and successful allocation of Metal GPU layers.
       2. Whisper binary responsiveness by transcribing a synthetic silent audio test buffer.
       3. Piper ONNX load verification by synthesizing a silent 0.5s audio pulse.
       4. Active presence and permission validation for system_prompt.txt.
+    If models are not yet downloaded, returns needs_onboarding=True without crashing.
     """
     t0 = time.perf_counter()
-    logger.info("Starting Project Lloyd Diagnostic Self-Check Protocol...")
+    models_state = download_manager.get_status(verify_hashes=False)
 
+    if models_state["needs_onboarding"]:
+        logger.info("Models missing or onboarding requested -> awaiting Onboarding Download Wizard.")
+        return {
+            "overall_status": "onboarding_required",
+            "all_checks_passed": False,
+            "needs_onboarding": True,
+            "boot_time_ms": round((time.perf_counter() - t0) * 1000.0, 1),
+            "models": models_state,
+        }
+
+    logger.info("Starting Project Lloyd Diagnostic Self-Check Protocol...")
     llm_diag = llm_engine.load_model()
     stt_diag = stt_engine.load_model()
     tts_diag = tts_engine.load_model()
@@ -87,6 +99,7 @@ def run_startup_self_check() -> Dict[str, Any]:
     report = {
         "overall_status": "healthy" if all_healthy else "degraded",
         "all_checks_passed": all_healthy,
+        "needs_onboarding": False,
         "boot_time_ms": total_boot_ms,
         "checks": {
             "gguf_and_metal": {
@@ -104,7 +117,7 @@ def run_startup_self_check() -> Dict[str, Any]:
             },
             "system_prompt_validation": {
                 "passed": prompt_ok,
-                "path": str(DEFAULT_PROMPT_PATH),
+                "path": str(llm_engine.prompt_path),
                 "creator_verified": "Mustafa Enes Kayaci" in prompt_content if prompt_ok else False,
             },
         },
@@ -113,6 +126,7 @@ def run_startup_self_check() -> Dict[str, Any]:
             "stt": stt_diag,
             "tts": tts_diag,
         },
+        "models": models_state,
     }
     logger.info(
         "Diagnostic Self-Check Protocol completed in %.1f ms -> %s",
@@ -132,9 +146,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Lloyd Local Neural Daemon",
-    description="100% Local Apple Silicon 3D AI Companion Backend created by Mustafa Enes Kayaci",
-    version="1.0.0",
+    title="Lloyd Local Neural Daemon V2",
+    description="100% Local Apple Silicon 3D AI Companion Backend created by Mustafa Enes Kayaci (Enes)",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -156,25 +170,34 @@ class TTSRequest(BaseModel):
     text: str
 
 
+class DownloadRequest(BaseModel):
+    prefer_cloud: bool = False
+
+
 @app.get("/api/health")
 async def get_health() -> Dict[str, Any]:
-    """Return full diagnostic verification metrics, engine statuses, and hardware telemetry."""
+    """Return full diagnostic verification metrics, onboarding status, and hardware telemetry."""
+    models_state = download_manager.get_status(verify_hashes=False)
     prompt_ok, prompt_text = llm_engine.validate_system_prompt()
     llm_diag = llm_engine.get_diagnostics()
     stt_diag = stt_engine.get_diagnostics()
     tts_diag = tts_engine.get_diagnostics()
 
     all_ready = (
-        llm_diag["ready"]
+        not models_state["needs_onboarding"]
+        and llm_diag["ready"]
         and stt_diag["ready"]
         and tts_diag["ready"]
         and prompt_ok
     )
 
     return {
-        "status": "healthy" if all_ready else "degraded",
+        "status": "healthy" if all_ready else ("onboarding" if models_state["needs_onboarding"] else "degraded"),
         "all_checks_passed": all_ready,
+        "needs_onboarding": models_state["needs_onboarding"],
         "creator": "Mustafa Enes Kayaci (Enes)",
+        "repository": "https://github.com/MustafaEnes123/Lloyd",
+        "license": "MIT License",
         "checks": {
             "gguf_and_metal": {
                 "passed": bool(llm_diag["gguf_integrity"] and llm_diag["metal_gpu_offload"]),
@@ -191,7 +214,7 @@ async def get_health() -> Dict[str, Any]:
             },
             "system_prompt_validation": {
                 "passed": prompt_ok,
-                "path": str(DEFAULT_PROMPT_PATH),
+                "path": str(llm_engine.prompt_path),
                 "creator_verified": "Mustafa Enes Kayaci" in prompt_text if prompt_ok else False,
             },
         },
@@ -200,9 +223,87 @@ async def get_health() -> Dict[str, Any]:
             "stt": stt_diag,
             "tts": tts_diag,
         },
+        "models": models_state,
         "system_prompt": prompt_text if prompt_ok else "",
         "hardware": watchdog.get_snapshot(),
     }
+
+
+@app.get("/api/models/status")
+async def get_models_status(verify: bool = False) -> Dict[str, Any]:
+    """Return storage status and SHA-256 verification state for all required neural assets."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(inference_executor, download_manager.get_status, verify)
+
+
+@app.post("/api/models/verify")
+async def verify_models_sha256() -> Dict[str, Any]:
+    """Compute SHA-256 hashes of all installed weights and run self-check."""
+    loop = asyncio.get_running_loop()
+    download_manager.force_onboarding = False
+    status = await loop.run_in_executor(inference_executor, download_manager.get_status, True)
+    if status["ready"] and not (llm_engine.is_ready and stt_engine.is_ready and tts_engine.is_ready):
+        await loop.run_in_executor(inference_executor, run_startup_self_check)
+    return {
+        "status": "verified",
+        "models": status,
+        "health": await get_health(),
+    }
+
+
+@app.post("/api/models/purge")
+async def purge_models_endpoint() -> Dict[str, Any]:
+    """
+    Purge weights in ~/Library/Application Support/Lloyd/models and trigger the Onboarding Modal
+    so the user can re-verify or re-download weights cleanly.
+    """
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(inference_executor, download_manager.purge_models)
+    return result
+
+
+@app.post("/api/models/download")
+async def download_models_stream(req: DownloadRequest) -> StreamingResponse:
+    """
+    Stream onboarding asset provisioning progress (NDJSON lines) with live MB/s, ETA,
+    and SHA-256 verification, followed by automated engine initialization.
+    """
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue[Optional[Dict[str, Any]]] = asyncio.Queue()
+
+    def _worker() -> None:
+        try:
+            for ev in download_manager.stream_provision_all(prefer_cloud=req.prefer_cloud):
+                loop.call_soon_threadsafe(queue.put_nowait, ev)
+            # Trigger engine initialization & self-check immediately after assets are verified
+            loop.call_soon_threadsafe(
+                queue.put_nowait,
+                {"type": "self_check_start"},
+            )
+            report = run_startup_self_check()
+            loop.call_soon_threadsafe(
+                queue.put_nowait,
+                {"type": "self_check_complete", "report": report},
+            )
+        except Exception as exc:
+            logger.exception("Onboarding provisioning failed: %s", exc)
+            loop.call_soon_threadsafe(
+                queue.put_nowait,
+                {"type": "onboarding_error", "error": str(exc)},
+            )
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, None)
+
+    loop.run_in_executor(inference_executor, _worker)
+
+    async def _event_generator():
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            yield json.dumps(item) + "\n"
+
+    return StreamingResponse(_event_generator(), media_type="application/x-ndjson")
 
 
 @app.get("/api/persona")
@@ -211,8 +312,10 @@ async def get_persona() -> Dict[str, Any]:
     ok, content = llm_engine.validate_system_prompt()
     return {
         "valid": ok,
-        "path": str(DEFAULT_PROMPT_PATH),
+        "path": str(llm_engine.prompt_path),
         "creator": "Mustafa Enes Kayaci (Enes)",
+        "repository": "https://github.com/MustafaEnes123/Lloyd",
+        "license": "MIT License",
         "prompt": content if ok else "",
         "guardrails": [
             "Creator Attribution: Designed & built exclusively by Mustafa Enes Kayaci (Enes)",
@@ -328,13 +431,6 @@ async def _stream_llm_and_tts_over_ws(
     user_text: str,
     ws_send_lock: asyncio.Lock,
 ) -> None:
-    """
-    Pipeline-parallel LLM + TTS orchestrator:
-      1. Emits state="THINKING"
-      2. Streams tokens from LLMEngine -> emits "llm_token" immediately for live subtitle typewriter
-      3. As soon as each sentence completes (., !, ?), dispatches it to TTSEngine while LLM continues
-         generating subsequent sentences, emitting "tts_chunk" with 22050Hz PCM + 60Hz amplitude envelope.
-    """
     loop = asyncio.get_running_loop()
 
     async def safe_send(payload: Dict[str, Any]) -> None:
@@ -400,7 +496,6 @@ async def _stream_llm_and_tts_over_ws(
                 }
             )
         elif ev_type == "sentence":
-            # Keep sentence synthesis ordered while running concurrently with LLM token generation
             if tts_tasks:
                 await tts_tasks[-1]
             task = asyncio.create_task(_synthesize_and_send(ev["sentence"], ev["index"]))
@@ -425,13 +520,6 @@ async def _stream_llm_and_tts_over_ws(
 @app.websocket("/ws")
 @app.websocket("/ws/lloyd")
 async def websocket_endpoint(websocket: WebSocket) -> None:
-    """
-    Full-duplex WebSocket streaming pipeline for:
-      - Continuous Voice Loop (VAD 800ms silence threshold) & Push-to-Talk audio capture
-      - Instant Whisper.cpp transcription
-      - Streaming Llama.cpp Metal token generation
-      - Streaming Piper ONNX 22050Hz PCM audio synthesis + amplitude lip-sync envelopes
-    """
     await websocket.accept()
     ws_send_lock = asyncio.Lock()
     vad = VoiceActivityDetector(sample_rate=16000, silence_threshold_ms=800)
@@ -443,7 +531,6 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         async with ws_send_lock:
             await websocket.send_json(payload)
 
-    # Send initial handshake with health & hardware status
     health_snapshot = await get_health()
     await safe_send(
         {
@@ -478,7 +565,6 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             message = await websocket.receive()
 
             if "bytes" in message and message["bytes"] is not None:
-                # Raw binary 16kHz 16-bit mono PCM audio frame for continuous VAD loop
                 raw_bytes = message["bytes"]
                 if not raw_bytes:
                     continue
@@ -518,7 +604,6 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 )
 
             elif msg_type == "audio_chunk":
-                # Base64-encoded 16kHz PCM16 chunk from browser AudioContext
                 b64 = data.get("pcm_base64", "")
                 mode = data.get("mode", "vad")
                 if not b64:
@@ -579,7 +664,6 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         logger.warning("WebSocket session ended: %s", exc)
 
 
-# Mount built frontend dist if present (for standalone macOS .app mode)
 FRONTEND_DIST = BACKEND_DIR.parent / "frontend" / "dist"
 if FRONTEND_DIST.exists():
     app.mount("/", StaticFiles(directory=str(FRONTEND_DIST), html=True), name="frontend")

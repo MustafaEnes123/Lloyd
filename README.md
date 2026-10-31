@@ -1,8 +1,10 @@
-# Project Lloyd — Local 3D Desktop AI Companion (macOS / Apple Silicon)
+# Project Lloyd V2 — Local 3D Desktop AI Companion (macOS / Apple Silicon)
 
-**Conceptualized, Engineered, and Built by Mustafa Enes Kayaci (Enes)**
+**Conceptualized, Engineered, and Built by Mustafa Enes Kayaci (Enes)**  
+**Repository**: [https://github.com/MustafaEnes123/Lloyd](https://github.com/MustafaEnes123/Lloyd)  
+**License**: [MIT License](file:///Users/mustafaeneskayaci/Documents/coding_projects/Lloyd/LICENSE)
 
-Lloyd is a 100% local, offline, autonomous 3D desktop companion engineered specifically for Apple Silicon (`arm64` Metal Unified Memory). Lloyd lives inside an interactive Three.js cyber-loft environment, listens with near-zero latency via Whisper.cpp + WebRTC Voice Activity Detection (800ms silence threshold), thinks on Metal GPU layers via Llama.cpp, and speaks in real time using Piper ONNX synthesis at 22050Hz with live frequency-driven jaw & mouth lip-sync.
+Lloyd is a 100% local, offline, autonomous 3D desktop companion engineered specifically for Apple Silicon (`arm64` Metal Unified Memory). Lloyd lives inside an interactive Three.js cyber-loft environment, features a Google Gemini-inspired Neural Expressive UI, real-time 3D character appearance customization, and a zero-bundle onboarding downloader (`~/Library/Application Support/Lloyd/models`) with cryptographic SHA-256 verification.
 
 ---
 
@@ -10,7 +12,8 @@ Lloyd is a 100% local, offline, autonomous 3D desktop companion engineered speci
 
 ```text
 Lloyd/
-├── m4s/                                # Local neural model assets
+├── LICENSE                             # MIT License (Mustafa Enes Kayaci / Enes)
+├── m4s/                                # Local developer model fallback cache
 │   ├── qwen2.5-1.5b-instruct-q4_k_m.gguf
 │   ├── ggml-tiny.en.bin
 │   ├── en_US-lessac-medium.onnx
@@ -18,6 +21,7 @@ Lloyd/
 │   └── system_prompt.txt
 ├── backend/                            # High-performance local inference daemon
 │   ├── app.py                          # FastAPI / Uvicorn server & WebSocket orchestrator
+│   ├── downloader.py                   # Onboarding downloader, SHA-256 verifier & Application Support manager
 │   ├── engine_llm.py                   # llama-cpp-python with Metal acceleration (n_gpu_layers=-1)
 │   ├── engine_stt.py                   # whisper.cpp (pywhispercpp) + 800ms VAD pipeline
 │   ├── engine_tts.py                   # onnxruntime Piper TTS 22050Hz audio & lip-sync pipeline
@@ -29,12 +33,16 @@ Lloyd/
 │   ├── src/
 │   │   ├── main.tsx
 │   │   ├── App.tsx
+│   │   ├── types/
+│   │   │   └── customization.ts        # CharacterCustomizationState & Hair Palette presets
 │   │   ├── components/
-│   │   │   ├── Canvas3D.tsx            # Three.js 3D Anime Cyber-Loft Scene & Lighting
-│   │   │   ├── Character.tsx           # Procedural cel-shaded 3D anime humanoid companion
-│   │   │   ├── SettingsModal.tsx       # Top-left frosted-glass configuration & diagnostics panel
+│   │   │   ├── NeuralSparkLogo.tsx     # Multi-layered 4-pointed star / neural spark SVG logo
+│   │   │   ├── OnboardingModal.tsx     # Step-by-step model download & SHA-256 verification wizard
+│   │   │   ├── Canvas3D.tsx            # Three.js 3D Anime Cyber-Loft Scene & Dynamic Lighting
+│   │   │   ├── Character.tsx           # Customizable cel-shaded 3D anime humanoid companion
+│   │   │   ├── SettingsModal.tsx       # 4-Tab Studio (Appearance, Persona, Hardware, Storage)
 │   │   │   ├── DiagnosticBar.tsx       # Hardware, STT, LLM, TTS status indicators
-│   │   │   ├── SubtitleOverlay.tsx     # Live conversation captioning & manual text input
+│   │   │   ├── SubtitleOverlay.tsx     # Floating bottom dialogue dock & waveform visualizer
 │   │   │   └── AudioVisualizer.tsx     # Real-time frequency reactivity during speech
 │   │   ├── hooks/
 │   │   │   ├── useVoiceLoop.ts         # Continuous VAD & Push-to-Talk (Spacebar) audio loop
@@ -42,9 +50,10 @@ Lloyd/
 │   │   └── styles/
 │   │       └── index.css
 │   └── public/
+│       └── lloyd-icon.svg
 └── scripts/
     ├── dev.sh                          # One-click startup for backend & frontend
-    └── build_mac.sh                    # Automated packager into native macOS .app & .dmg
+    └── build_mac.sh                    # Portable macOS .app & drag-and-drop .dmg packager
 ```
 
 ---
@@ -63,10 +72,10 @@ source /Users/mustafaeneskayaci/Documents/coding_projects/Lloyd/.venv/bin/activa
 - **3D Companion UI**: `http://127.0.0.1:5173`
 - **Inference Daemon & Health Check**: `http://127.0.0.1:8000/api/health`
 
-### 3. Build Native macOS `.app` and `.dmg` Installer
+### 3. Build Portable Zero-Config macOS `.app` and `.dmg` Installer
 ```bash
 ./scripts/build_mac.sh
 ```
 Outputs:
 - `/Users/mustafaeneskayaci/Documents/coding_projects/Lloyd/dist/Lloyd.app`
-- `/Users/mustafaeneskayaci/Documents/coding_projects/Lloyd/dist/Lloyd-macOS-arm64.dmg`
+- `/Users/mustafaeneskayaci/Documents/coding_projects/Lloyd/dist/Lloyd-macOS-arm64.dmg` (Lightweight `<300 KB` installer with `/Applications` drag-and-drop shortcut; models are automatically provisioned into `~/Library/Application Support/Lloyd/models` on first launch).

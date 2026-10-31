@@ -24,14 +24,15 @@ from typing import Any, Dict, Generator, List, Optional, Tuple
 
 import numpy as np
 
+from downloader import download_manager
 from hardware import watchdog
 
 logger = logging.getLogger("lloyd.tts")
 
 BASE_DIR = Path("/Users/mustafaeneskayaci/Documents/coding_projects/Lloyd")
 M4S_DIR = BASE_DIR / "m4s"
-DEFAULT_ONNX_PATH = M4S_DIR / "en_US-lessac-medium.onnx"
-DEFAULT_CONFIG_PATH = M4S_DIR / "en_US-lessac-medium.onnx.json"
+DEFAULT_ONNX_PATH = download_manager.resolve_asset_path("en_US-lessac-medium.onnx")
+DEFAULT_CONFIG_PATH = download_manager.resolve_asset_path("en_US-lessac-medium.onnx.json")
 
 PUNCTUATION_CHUNK_RE = re.compile(r"(?<=[.!?])\s+")
 
@@ -139,6 +140,8 @@ class TTSEngine:
         return None
 
     def validate_files(self) -> Tuple[bool, str]:
+        self.onnx_path = download_manager.resolve_asset_path("en_US-lessac-medium.onnx")
+        self.config_path = download_manager.resolve_asset_path("en_US-lessac-medium.onnx.json")
         if not self.onnx_path.exists():
             return False, f"Missing Piper ONNX model at {self.onnx_path}"
         if not self.config_path.exists():

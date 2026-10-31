@@ -17,14 +17,15 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Deque, Dict, Generator, List, Optional, Tuple
 
+from downloader import download_manager
 from hardware import watchdog
 
 logger = logging.getLogger("lloyd.llm")
 
 BASE_DIR = Path("/Users/mustafaeneskayaci/Documents/coding_projects/Lloyd")
 M4S_DIR = BASE_DIR / "m4s"
-DEFAULT_MODEL_PATH = M4S_DIR / "qwen2.5-1.5b-instruct-q4_k_m.gguf"
-DEFAULT_PROMPT_PATH = M4S_DIR / "system_prompt.txt"
+DEFAULT_MODEL_PATH = download_manager.resolve_asset_path("qwen2.5-1.5b-instruct-q4_k_m.gguf")
+DEFAULT_PROMPT_PATH = download_manager.resolve_asset_path("system_prompt.txt")
 
 # Regex matching all Unicode emojis, dingbats, emoticons, symbols, and variation selectors
 EMOJI_PATTERN = re.compile(
@@ -128,8 +129,14 @@ class LLMEngine:
                     pass
                 self.llm = None
 
+    def refresh_paths(self) -> None:
+        """Refresh model and prompt paths from download_manager (Application Support or ./m4s)."""
+        self.model_path = download_manager.resolve_asset_path("qwen2.5-1.5b-instruct-q4_k_m.gguf")
+        self.prompt_path = download_manager.resolve_asset_path("system_prompt.txt")
+
     def validate_system_prompt(self) -> Tuple[bool, str]:
         """Verify presence, read permissions, and content of system_prompt.txt."""
+        self.prompt_path = download_manager.resolve_asset_path("system_prompt.txt")
         if not self.prompt_path.exists():
             return False, f"Missing system prompt at {self.prompt_path}"
         if not os.access(self.prompt_path, os.R_OK):
@@ -147,6 +154,7 @@ class LLMEngine:
 
     def validate_gguf_integrity(self) -> Tuple[bool, str]:
         """Verify GGUF binary existence, size, and magic header bytes."""
+        self.model_path = download_manager.resolve_asset_path("qwen2.5-1.5b-instruct-q4_k_m.gguf")
         if not self.model_path.exists():
             return False, f"Missing GGUF file at {self.model_path}"
         if not os.access(self.model_path, os.R_OK):
