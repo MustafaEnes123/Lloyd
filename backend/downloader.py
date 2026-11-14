@@ -436,13 +436,22 @@ class ModelDownloadManager:
                 }
                 continue
 
-            # Case 3: Stream directly from Cloud URL with SHA-256 verification
+            # Case 3: Stream directly from GitHub Release (or HuggingFace CDN fallback) with SHA-256 verification
             hasher = hashlib.sha256()
             downloaded_for_file = 0
             t_file_start = time.perf_counter()
             last_emit = 0.0
 
-            with requests.get(spec.url, stream=True, timeout=30) as resp:
+            gh_release_url = f"https://github.com/MustafaEnes123/Lloyd/releases/download/Release/{spec.filename}"
+            download_url = spec.url
+            try:
+                head_r = requests.head(gh_release_url, allow_redirects=True, timeout=5)
+                if head_r.status_code == 200:
+                    download_url = gh_release_url
+            except Exception:
+                pass
+
+            with requests.get(download_url, stream=True, timeout=30) as resp:
                 resp.raise_for_status()
                 total_len = int(resp.headers.get("Content-Length") or spec.expected_bytes)
                 with temp_path.open("wb") as dst_f:
