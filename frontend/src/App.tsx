@@ -10,6 +10,7 @@ import {
   loadCustomizationState,
   saveCustomizationState,
   type CharacterCustomizationState,
+  type RobotEmotion,
 } from './types/customization';
 
 export const App: React.FC = () => {
@@ -18,6 +19,8 @@ export const App: React.FC = () => {
     loadCustomizationState()
   );
   const [manualOnboardingOpen, setManualOnboardingOpen] = useState<boolean>(false);
+  const [activeEmotion, setActiveEmotion] = useState<RobotEmotion>('happy');
+  const [cameraPreset, setCameraPreset] = useState<'default' | 'closeup' | 'wide'>('default');
 
   const {
     connected,
@@ -27,6 +30,8 @@ export const App: React.FC = () => {
     liveSubtitle,
     lastUserTranscript,
     audioMetrics,
+    ttsMuted,
+    setTtsMuted,
     sendText,
     sendAudioChunk,
     startPushToTalk,
@@ -36,6 +41,7 @@ export const App: React.FC = () => {
     refreshDiagnostics,
     verifyModels,
     purgeModels,
+    updatePersona,
   } = useLloydSocket();
 
   const {
@@ -64,25 +70,36 @@ export const App: React.FC = () => {
     refreshDiagnostics();
   };
 
+  const handleRobotInteract = () => {
+    const cycle: RobotEmotion[] = ['excited', 'happy', 'wink', 'curious', 'zen'];
+    setActiveEmotion((prev) => cycle[(cycle.indexOf(prev) + 1) % cycle.length]);
+  };
+
   return (
-    <main className="relative w-screen h-screen overflow-hidden bg-[#050814] select-none">
-      {/* 3D Anime Companion & Cyber-Loft Simulation Scene */}
+    <main className="relative w-screen h-screen overflow-hidden bg-[#03050a] select-none">
+      {/* 3D Deep Space Orbital Observatory & Centered Expressive Robot Companion */}
       <Canvas3D
         companionState={companionState}
         audioMetrics={audioMetrics}
         micLevel={micLevel}
         customization={customization}
         isOnboarding={isOnboardingOpen}
+        activeEmotion={activeEmotion}
+        cameraPreset={cameraPreset}
+        onRobotInteract={handleRobotInteract}
       />
 
-      {/* Top-Left Floating Glass Navigation, Styling Studio & 4-Tab Settings Modal */}
+      {/* Top-Left Brand Trigger & 4-Tab Robotics Studio Inspector */}
       <SettingsModal
         health={health}
         hardware={hardware}
         voiceMode={voiceMode}
+        ttsMuted={ttsMuted}
         customization={customization}
         onCustomizationChange={setCustomization}
         onVoiceModeChange={setVoiceMode}
+        onTtsMutedChange={setTtsMuted}
+        onUpdatePersona={updatePersona}
         onRefreshDiagnostics={refreshDiagnostics}
         onClearHistory={clearHistory}
         onVerifyModels={verifyModels}
@@ -90,7 +107,7 @@ export const App: React.FC = () => {
         onOpenOnboarding={() => setManualOnboardingOpen(true)}
       />
 
-      {/* Top-Right Live Hardware, STT, LLM, TTS Status Bar */}
+      {/* Top-Right Interactive Mood Switcher, Camera Framing & Live Telemetry */}
       <DiagnosticBar
         connected={connected}
         companionState={companionState}
@@ -98,11 +115,15 @@ export const App: React.FC = () => {
         hardware={hardware}
         micEnabled={micEnabled}
         voiceMode={voiceMode}
+        activeEmotion={activeEmotion}
+        cameraPreset={cameraPreset}
+        onEmotionSelect={setActiveEmotion}
+        onCameraPresetChange={setCameraPreset}
         onToggleMic={toggleMicrophone}
         onInterrupt={interrupt}
       />
 
-      {/* Bottom-Center Floating Neural Expressive Subtitle & Dialogue Dock */}
+      {/* Bottom-Center Editorial Dialogue & Command Dock */}
       <SubtitleOverlay
         liveSubtitle={liveSubtitle}
         lastUserTranscript={lastUserTranscript}
@@ -116,7 +137,7 @@ export const App: React.FC = () => {
         onPttUp={endPushToTalk}
       />
 
-      {/* Automated Onboarding & Asset Download Wizard */}
+      {/* Automated Onboarding & SHA-256 Asset Verification Wizard */}
       <OnboardingModal
         isOpen={isOnboardingOpen}
         onComplete={handleOnboardingComplete}

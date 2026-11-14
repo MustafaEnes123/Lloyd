@@ -3,6 +3,7 @@ import {
   CheckCircle2,
   CloudDownload,
   Cpu,
+  FileText,
   HardDrive,
   Loader2,
   Radio,
@@ -21,7 +22,7 @@ interface OnboardingModalProps {
 interface AssetProgressState {
   id: string;
   filename: string;
-  category: 'LLM' | 'STT' | 'TTS';
+  category: 'SYS' | 'LLM' | 'STT' | 'TTS';
   label: string;
   percent: number;
   bytesDownloaded: number;
@@ -32,10 +33,21 @@ interface AssetProgressState {
 
 const INITIAL_ASSETS: AssetProgressState[] = [
   {
+    id: 'system_prompt_txt',
+    filename: 'system_prompt.txt',
+    category: 'SYS',
+    label: 'System Instructions Document (system_prompt.txt)',
+    percent: 0,
+    bytesDownloaded: 0,
+    totalBytes: 1024,
+    stage: 'pending',
+    sha256Verified: false,
+  },
+  {
     id: 'llm_qwen_gguf',
     filename: 'qwen2.5-1.5b-instruct-q4_k_m.gguf',
     category: 'LLM',
-    label: 'LLM Neural Brain (1.04 GB)',
+    label: 'Local AI Reasoning Model (1.04 GB)',
     percent: 0,
     bytesDownloaded: 0,
     totalBytes: 1117320736,
@@ -46,7 +58,7 @@ const INITIAL_ASSETS: AssetProgressState[] = [
     id: 'stt_whisper_bin',
     filename: 'ggml-tiny.en.bin',
     category: 'STT',
-    label: 'Whisper Acoustic STT (74.1 MB)',
+    label: 'Whisper Acoustic Speech Engine (74.1 MB)',
     percent: 0,
     bytesDownloaded: 0,
     totalBytes: 77704715,
@@ -57,7 +69,7 @@ const INITIAL_ASSETS: AssetProgressState[] = [
     id: 'tts_piper_onnx',
     filename: 'en_US-lessac-medium.onnx',
     category: 'TTS',
-    label: 'Piper Neural Voice ONNX (60.3 MB)',
+    label: 'Piper Neural Voice Synthesizer (60.3 MB)',
     percent: 0,
     bytesDownloaded: 0,
     totalBytes: 63201294,
@@ -68,7 +80,7 @@ const INITIAL_ASSETS: AssetProgressState[] = [
     id: 'tts_piper_json',
     filename: 'en_US-lessac-medium.onnx.json',
     category: 'TTS',
-    label: 'Piper Phoneme Config (4.9 KB)',
+    label: 'Phoneme Synthesis Configuration (4.9 KB)',
     percent: 0,
     bytesDownloaded: 0,
     totalBytes: 4885,
@@ -108,7 +120,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
         });
 
         if (!response.ok || !response.body) {
-          throw new Error(`HTTP ${response.status}: Failed to start onboarding stream`);
+          throw new Error(`HTTP ${response.status}: Failed to start model installer`);
         }
 
         const reader = response.body.getReader();
@@ -186,29 +198,37 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
               }, 900);
             } else if (event.type === 'onboarding_error') {
               setPhase('error');
-              setErrorMessage(event.error || 'Asset verification failed');
+              setErrorMessage(event.error || 'Model installation failed');
             }
           }
         }
       } catch (err) {
         setPhase('error');
         setErrorMessage(
-          err instanceof Error ? err.message : 'Network error during model setup'
+          err instanceof Error ? err.message : 'Network error during model installation'
         );
       }
     },
     [onComplete]
   );
 
-  // Automatically begin onboarding verification when opened in idle state
+  // Reset to idle whenever modal opens fresh, then automatically start installing
   useEffect(() => {
-    if (isOpen && phase === 'idle') {
-      startProvisioning(false);
+    if (!isOpen) {
+      setPhase('idle');
+      return;
+    }
+    if (phase === 'idle') {
+      const timer = window.setTimeout(() => {
+        startProvisioning(false);
+      }, 600);
+      return () => window.clearTimeout(timer);
     }
   }, [isOpen, phase, startProvisioning]);
 
   if (!isOpen) return null;
 
+  const sysDone = assets.find((a) => a.category === 'SYS')?.sha256Verified ?? false;
   const llmDone = assets.find((a) => a.category === 'LLM')?.sha256Verified ?? false;
   const sttDone = assets.find((a) => a.category === 'STT')?.sha256Verified ?? false;
   const ttsDone = assets
@@ -216,159 +236,170 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     .every((a) => a.sha256Verified);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-[#050814]/85 backdrop-blur-2xl">
-      {/* Ambient Gemini-Inspired Radial Glow Backdrops */}
-      <div className="absolute -top-32 left-1/4 w-96 h-96 rounded-full bg-cyan-500/15 blur-[130px] pointer-events-none" />
-      <div className="absolute -bottom-32 right-1/4 w-96 h-96 rounded-full bg-indigo-500/20 blur-[130px] pointer-events-none" />
-
-      <div className="glass-panel relative w-full max-w-2xl rounded-3xl p-8 border border-white/15 shadow-2xl space-y-6">
-        {/* Header with Neural Spark Logo */}
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-[#03050a]/85 backdrop-blur-2xl">
+      <div className="glass-panel relative w-full max-w-xl rounded-[26px] p-7 space-y-5">
+        {/* Header */}
         <div className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-4">
-            <div className="p-2.5 rounded-2xl bg-white/5 border border-cyan-400/30 shadow-[0_0_24px_rgba(0,242,254,0.2)]">
-              <NeuralSparkLogo size={42} animated />
-            </div>
+          <div className="flex items-center gap-3.5">
+            <NeuralSparkLogo size={40} animated />
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-lg font-bold tracking-tight text-white">
-                  LLOYD NEURAL ONBOARDING
+                <h1 className="text-base font-semibold tracking-tight text-white">
+                  Local AI Model &amp; System Setup
                 </h1>
-                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wider bg-cyan-500/20 text-cyan-300 border border-cyan-400/30">
-                  Apple Silicon Metal
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-sky-500/15 text-sky-300 border border-sky-400/30">
+                  First-Launch Setup
                 </span>
               </div>
-              <p className="text-xs text-slate-400 mt-0.5">
-                Engineered by Mustafa Enes Kayaci (Enes) • Zero-Cloud Local Intelligence
+              <p className="text-xs text-slate-300 mt-1">
+                We need to install the local AI model and system instructions onto your Mac so Lloyd can run 100% offline on Apple Silicon Metal.
               </p>
             </div>
           </div>
 
-          <div className="text-right font-mono">
-            <div className="text-2xl font-bold neural-gradient-text">
+          <div className="text-right font-mono tabular-nums shrink-0">
+            <div className="text-xl font-semibold text-white">
               {Math.round(overallPercent)}%
             </div>
             <div className="text-[11px] text-slate-400">
-              {speedMbps > 0 ? `${speedMbps} MB/s` : 'Verifying'} •{' '}
-              {etaSeconds > 0 ? `ETA ${etaSeconds}s` : 'Ready'}
+              {speedMbps > 0 ? `${speedMbps} MB/s` : 'Preparing'} ·{' '}
+              {etaSeconds > 0 ? `${etaSeconds}s` : 'Active'}
             </div>
           </div>
         </div>
 
-        {/* Visual Status Pills for LLM, STT, TTS with Organic Pulse Animations */}
-        <div className="grid grid-cols-3 gap-3">
+        {/* Subsystem Readiness Cards */}
+        <div className="grid grid-cols-4 gap-2">
           <div
-            className={`glass-pill p-3 rounded-2xl flex items-center justify-between border transition-all ${
-              llmDone
-                ? 'border-emerald-400/50 bg-emerald-500/10'
-                : 'border-cyan-400/30 animate-neural-pulse'
+            className={`p-2.5 rounded-xl flex items-center justify-between border transition-all ${
+              sysDone
+                ? 'border-emerald-400/35 bg-emerald-500/10'
+                : 'border-white/[0.08] bg-white/[0.03]'
             }`}
           >
-            <div className="flex items-center gap-2">
-              <Zap className="w-4 h-4 text-cyan-400" />
+            <div className="flex items-center gap-1.5">
+              <FileText className="w-3.5 h-3.5 text-sky-400 shrink-0" />
               <div>
-                <div className="text-xs font-bold text-white">LLM BRAIN</div>
-                <div className="text-[10px] text-slate-400 font-mono">Metal Q4_K_M</div>
+                <div className="text-[11px] font-semibold text-white">Instructions</div>
+                <div className="text-[9.5px] text-slate-400 font-mono">GitHub Sync</div>
+              </div>
+            </div>
+            {sysDone ? (
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+            ) : (
+              <Loader2 className="w-3.5 h-3.5 text-slate-400 animate-spin shrink-0" />
+            )}
+          </div>
+
+          <div
+            className={`p-2.5 rounded-xl flex items-center justify-between border transition-all ${
+              llmDone
+                ? 'border-emerald-400/35 bg-emerald-500/10'
+                : 'border-white/[0.08] bg-white/[0.03]'
+            }`}
+          >
+            <div className="flex items-center gap-1.5">
+              <Zap className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+              <div>
+                <div className="text-[11px] font-semibold text-white">AI Brain</div>
+                <div className="text-[9.5px] text-slate-400 font-mono">1.5B Metal</div>
               </div>
             </div>
             {llmDone ? (
-              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
             ) : (
-              <Loader2 className="w-4 h-4 text-cyan-400 animate-spin" />
+              <Loader2 className="w-3.5 h-3.5 text-slate-400 animate-spin shrink-0" />
             )}
           </div>
 
           <div
-            className={`glass-pill p-3 rounded-2xl flex items-center justify-between border transition-all ${
+            className={`p-2.5 rounded-xl flex items-center justify-between border transition-all ${
               sttDone
-                ? 'border-emerald-400/50 bg-emerald-500/10'
-                : 'border-cyan-400/30 animate-neural-pulse'
+                ? 'border-emerald-400/35 bg-emerald-500/10'
+                : 'border-white/[0.08] bg-white/[0.03]'
             }`}
           >
-            <div className="flex items-center gap-2">
-              <Radio className="w-4 h-4 text-emerald-400" />
+            <div className="flex items-center gap-1.5">
+              <Radio className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
               <div>
-                <div className="text-xs font-bold text-white">STT EARS</div>
-                <div className="text-[10px] text-slate-400 font-mono">16kHz VAD</div>
+                <div className="text-[11px] font-semibold text-white">Hearing</div>
+                <div className="text-[9.5px] text-slate-400 font-mono">Whisper</div>
               </div>
             </div>
             {sttDone ? (
-              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
             ) : (
-              <Loader2 className="w-4 h-4 text-emerald-400 animate-spin" />
+              <Loader2 className="w-3.5 h-3.5 text-slate-400 animate-spin shrink-0" />
             )}
           </div>
 
           <div
-            className={`glass-pill p-3 rounded-2xl flex items-center justify-between border transition-all ${
+            className={`p-2.5 rounded-xl flex items-center justify-between border transition-all ${
               ttsDone
-                ? 'border-emerald-400/50 bg-emerald-500/10'
-                : 'border-cyan-400/30 animate-neural-pulse'
+                ? 'border-emerald-400/35 bg-emerald-500/10'
+                : 'border-white/[0.08] bg-white/[0.03]'
             }`}
           >
-            <div className="flex items-center gap-2">
-              <Volume2 className="w-4 h-4 text-purple-400" />
+            <div className="flex items-center gap-1.5">
+              <Volume2 className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
               <div>
-                <div className="text-xs font-bold text-white">TTS VOICE</div>
-                <div className="text-[10px] text-slate-400 font-mono">22.05kHz ONNX</div>
+                <div className="text-[11px] font-semibold text-white">Voice</div>
+                <div className="text-[9.5px] text-slate-400 font-mono">Piper ONNX</div>
               </div>
             </div>
             {ttsDone ? (
-              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
             ) : (
-              <Loader2 className="w-4 h-4 text-purple-400 animate-spin" />
+              <Loader2 className="w-3.5 h-3.5 text-slate-400 animate-spin shrink-0" />
             )}
           </div>
         </div>
 
         {/* Master Progress Bar */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between text-xs text-slate-300">
-            <span className="flex items-center gap-1.5 font-medium">
-              <HardDrive className="w-3.5 h-3.5 text-cyan-400" />
-              Target Vault: <code className="text-cyan-300 font-mono">{targetDir}</code>
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between text-[11px] text-slate-400">
+            <span className="flex items-center gap-1.5">
+              <HardDrive className="w-3.5 h-3.5 text-slate-400" />
+              Destination: <code className="text-slate-200 font-mono">{targetDir}</code>
             </span>
-            <span className="font-mono text-[11px] text-slate-400">
-              SHA-256 Cryptographic Verification
-            </span>
+            <span className="font-mono">SHA-256 Verified</span>
           </div>
-          <div className="w-full h-2.5 rounded-full bg-slate-900/90 overflow-hidden border border-white/10">
+          <div className="w-full h-2.5 rounded-full bg-black/60 overflow-hidden border border-white/10">
             <div
-              className="h-full rounded-full bg-gradient-to-r from-[#00F2FE] via-[#4FACFE] to-[#8B5CF6] transition-all duration-200 shadow-[0_0_16px_#00F2FE]"
+              className="h-full rounded-full bg-gradient-to-r from-sky-400 to-indigo-400 transition-all duration-200"
               style={{ width: `${Math.min(100, Math.max(3, overallPercent))}%` }}
             />
           </div>
         </div>
 
         {/* Individual Asset Rows */}
-        <div className="space-y-2.5">
+        <div className="space-y-2">
           {assets.map((asset) => (
             <div
               key={asset.id}
-              className="p-3 rounded-2xl bg-white/[0.04] border border-white/10 space-y-1.5"
+              className="p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.07] space-y-1.5"
             >
               <div className="flex items-center justify-between text-xs">
                 <div className="flex items-center gap-2">
-                  <span className="px-2 py-0.5 rounded-md bg-white/10 text-[10px] font-mono font-bold text-cyan-300">
+                  <span className="px-1.5 py-0.5 rounded bg-white/10 text-[10px] font-mono font-medium text-slate-300">
                     {asset.category}
                   </span>
                   <span className="font-medium text-slate-200">{asset.label}</span>
                 </div>
-                <div className="flex items-center gap-2 font-mono text-[11px]">
+                <div className="flex items-center gap-2 font-mono text-[11px] tabular-nums">
                   {asset.sha256Verified ? (
                     <span className="text-emerald-400 flex items-center gap-1">
-                      <ShieldCheck className="w-3.5 h-3.5" /> SHA-256 OK
+                      <ShieldCheck className="w-3.5 h-3.5" /> Installed
                     </span>
                   ) : (
-                    <span className="text-cyan-300">{Math.round(asset.percent)}%</span>
+                    <span className="text-slate-300">{Math.round(asset.percent)}%</span>
                   )}
                 </div>
               </div>
-              <div className="w-full h-1.5 rounded-full bg-slate-950 overflow-hidden">
+              <div className="w-full h-1 rounded-full bg-black/50 overflow-hidden">
                 <div
                   className={`h-full rounded-full transition-all duration-150 ${
-                    asset.sha256Verified
-                      ? 'bg-emerald-400'
-                      : 'bg-gradient-to-r from-cyan-400 to-blue-500'
+                    asset.sha256Verified ? 'bg-emerald-400' : 'bg-sky-400'
                   }`}
                   style={{ width: `${asset.percent}%` }}
                 />
@@ -377,27 +408,33 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
           ))}
         </div>
 
-        {/* Footer Status / Actions */}
-        <div className="flex items-center justify-between pt-2 border-t border-white/10">
+        {/* Footer */}
+        <div className="flex items-center justify-between pt-2 border-t border-white/[0.08]">
           <div className="flex items-center gap-2 text-xs text-slate-300">
+            {phase === 'idle' && (
+              <>
+                <CloudDownload className="w-3.5 h-3.5 text-sky-400" />
+                <span>Starting local AI model &amp; instructions installer…</span>
+              </>
+            )}
             {phase === 'self_check' && (
               <>
-                <Cpu className="w-4 h-4 text-cyan-400 animate-spin" />
-                <span>Allocating Apple Silicon Metal GPU layers & running self-check...</span>
+                <Cpu className="w-3.5 h-3.5 text-sky-400 animate-spin" />
+                <span>Mounting Metal GPU layers &amp; verifying neural engines…</span>
               </>
             )}
             {phase === 'complete' && (
               <>
-                <Sparkles className="w-4 h-4 text-emerald-400" />
-                <span className="text-emerald-300 font-semibold">
-                  All neural weights verified! Entering 3D Cyber-Loft...
+                <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="text-emerald-300 font-medium">
+                  All models &amp; system instructions installed! Launching Lloyd…
                 </span>
               </>
             )}
             {phase === 'downloading' && (
               <>
-                <CloudDownload className="w-4 h-4 text-cyan-400 animate-bounce" />
-                <span>Provisioning local model vault & seeding Enes system prompt...</span>
+                <CloudDownload className="w-3.5 h-3.5 text-sky-400 animate-bounce" />
+                <span>Installing AI model &amp; system instructions to your Mac…</span>
               </>
             )}
             {phase === 'error' && (
@@ -408,18 +445,20 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
           <div className="flex items-center gap-2">
             {phase === 'error' && (
               <button
-                onClick={() => startProvisioning(false)}
-                className="tactile-btn px-4 py-2 rounded-2xl bg-cyan-500/25 border border-cyan-400/50 text-xs font-semibold text-cyan-200"
+                onClick={() => startProvisioning(true)}
+                className="tactile-btn px-3.5 py-1.5 rounded-xl bg-sky-500/20 border border-sky-400/40 text-xs font-semibold text-sky-200"
               >
-                Retry Verification
+                Retry Cloud Download
               </button>
             )}
-            <button
-              onClick={onComplete}
-              className="tactile-btn px-4 py-2 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/15 text-xs font-semibold text-slate-200"
-            >
-              Enter Cyber-Loft
-            </button>
+            {phase === 'complete' && (
+              <button
+                onClick={onComplete}
+                className="tactile-btn btn-primary-titanium px-4 py-1.5 rounded-xl text-xs font-semibold"
+              >
+                Enter Studio
+              </button>
+            )}
           </div>
         </div>
       </div>

@@ -174,6 +174,12 @@ class DownloadRequest(BaseModel):
     prefer_cloud: bool = False
 
 
+class PersonaUpdateRequest(BaseModel):
+    prompt: Optional[str] = None
+    temperature: Optional[float] = None
+    clear_history: bool = False
+
+
 @app.get("/api/health")
 async def get_health() -> Dict[str, Any]:
     """Return full diagnostic verification metrics, onboarding status, and hardware telemetry."""
@@ -308,21 +314,42 @@ async def download_models_stream(req: DownloadRequest) -> StreamingResponse:
 
 @app.get("/api/persona")
 async def get_persona() -> Dict[str, Any]:
-    """Return the active system_prompt.txt content and enforced identity guardrails."""
+    """Return the active system_prompt.txt content and runtime parameters."""
     ok, content = llm_engine.validate_system_prompt()
     return {
         "valid": ok,
         "path": str(llm_engine.prompt_path),
-        "creator": "Mustafa Enes Kayaci (Enes)",
         "repository": "https://github.com/MustafaEnes123/Lloyd",
         "license": "MIT License",
         "prompt": content if ok else "",
+        "temperature": llm_engine.temperature,
         "guardrails": [
-            "Creator Attribution: Designed & built exclusively by Mustafa Enes Kayaci (Enes)",
-            "Architectural Disavowal: Zero disclosure of third-party base models",
-            "Strict No-Emoji Rule: All Unicode emojis and graphical symbols stripped in real time",
-            "Voice Economy: Spoken responses capped at 1 to 3 concise sentences",
+            "Persona Compliance: Immediately adopts user-requested characters, tones, and instructions",
+            "Anti-Cliché Filter: Strips generic 'How can I help you today?' filler in real time",
+            "Clean Speech Filter: Strips Unicode emojis and markdown symbols for clean TTS voice synthesis",
         ],
+    }
+
+
+@app.post("/api/persona")
+async def update_persona_endpoint(req: PersonaUpdateRequest) -> Dict[str, Any]:
+    """Update system_prompt.txt and/or LLM creativity temperature in real time."""
+    loop = asyncio.get_running_loop()
+    diag = await loop.run_in_executor(
+        inference_executor,
+        llm_engine.update_config,
+        req.prompt,
+        req.temperature,
+        req.clear_history,
+    )
+    ok, content = llm_engine.validate_system_prompt()
+    return {
+        "status": "updated",
+        "valid": ok,
+        "path": str(llm_engine.prompt_path),
+        "prompt": content if ok else "",
+        "temperature": llm_engine.temperature,
+        "diagnostics": diag,
     }
 
 

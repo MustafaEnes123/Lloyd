@@ -7,9 +7,9 @@ interface NeuralSparkLogoProps {
 }
 
 /**
- * Multi-layered glowing SVG icon representing a four-pointed star / neural spark
- * merging organic curves with futuristic cyber geometry, incorporating gradient blends
- * of electric cyan (#00F2FE), neural violet (#4FACFE / #8B5CF6), and deep obsidian.
+ * Precision Aerospace Orbital Emblem for Lloyd.
+ * Features a sleek obsidian-titanium squircle badge with an orbital ring and
+ * crisp four-point starlight core.
  */
 export const NeuralSparkLogo: React.FC<NeuralSparkLogoProps> = ({
   size = 28,
@@ -23,74 +23,69 @@ export const NeuralSparkLogo: React.FC<NeuralSparkLogoProps> = ({
       viewBox="0 0 128 128"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
-      className={`select-none ${className}`}
+      className={`select-none shrink-0 ${className}`}
     >
       <defs>
-        <linearGradient id="lloydSparkPrimary" x1="12" y1="12" x2="116" y2="116" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stopColor="#00F2FE" />
-          <stop offset="52%" stopColor="#4FACFE" />
-          <stop offset="100%" stopColor="#8B5CF6" />
+        <linearGradient id="lloydSurface" x1="16" y1="8" x2="112" y2="120" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stopColor="#1E293B" />
+          <stop offset="45%" stopColor="#0F172A" />
+          <stop offset="100%" stopColor="#050811" />
         </linearGradient>
 
-        <linearGradient id="lloydSparkSecondary" x1="112" y1="16" x2="16" y2="112" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stopColor="#38BDF8" stopOpacity="0.9" />
-          <stop offset="50%" stopColor="#818CF8" stopOpacity="0.65" />
-          <stop offset="100%" stopColor="#050814" stopOpacity="0.95" />
+        <linearGradient id="lloydRim" x1="12" y1="12" x2="116" y2="116" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stopColor="#F8FAFC" stopOpacity="0.45" />
+          <stop offset="50%" stopColor="#38BDF8" stopOpacity="0.25" />
+          <stop offset="100%" stopColor="#0F172A" stopOpacity="0.1" />
         </linearGradient>
 
-        <radialGradient id="lloydCoreGlow" cx="50%" cy="50%" r="50%">
+        <linearGradient id="lloydStar" x1="30" y1="24" x2="98" y2="104" gradientUnits="userSpaceOnUse">
           <stop offset="0%" stopColor="#FFFFFF" />
-          <stop offset="38%" stopColor="#00F2FE" />
-          <stop offset="75%" stopColor="#4FACFE" stopOpacity="0.45" />
-          <stop offset="100%" stopColor="#050814" stopOpacity="0" />
-        </radialGradient>
+          <stop offset="55%" stopColor="#BAE6FD" />
+          <stop offset="100%" stopColor="#38BDF8" />
+        </linearGradient>
 
-        <filter id="lloydSoftBloom" x="-25%" y="-25%" width="150%" height="150%">
-          <feGaussianBlur stdDeviation="5" result="blur" />
-          <feComposite in="SourceGraphic" in2="blur" operator="over" />
-        </filter>
+        <radialGradient id="lloydCore" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="#38BDF8" stopOpacity="0.55" />
+          <stop offset="100%" stopColor="#38BDF8" stopOpacity="0" />
+        </radialGradient>
       </defs>
 
-      {/* Deep Obsidian Cyber Hex Backing */}
-      <circle
+      {/* Precision Squircle Chassis */}
+      <rect
+        x="10"
+        y="10"
+        width="108"
+        height="108"
+        rx="30"
+        fill="url(#lloydSurface)"
+        stroke="url(#lloydRim)"
+        strokeWidth="2.5"
+      />
+
+      {/* Ambient Core Glow */}
+      <circle cx="64" cy="64" r="38" fill="url(#lloydCore)" />
+
+      {/* Tilted Elliptical Orbital Ring */}
+      <ellipse
         cx="64"
         cy="64"
-        r="56"
-        fill="#050814"
-        stroke="url(#lloydSparkPrimary)"
+        rx="44"
+        ry="18"
+        transform="rotate(-28 64 64)"
+        stroke="#38BDF8"
         strokeWidth="2.2"
-        strokeOpacity="0.45"
+        strokeOpacity="0.55"
+        strokeDasharray="6 4"
+        className={animated ? 'origin-center animate-[spin_24s_linear_infinite]' : ''}
       />
 
-      {/* Orbital Cyber Telemetry Ring */}
-      <circle
-        cx="64"
-        cy="64"
-        r="46"
-        stroke="url(#lloydSparkPrimary)"
-        strokeWidth="1.5"
-        strokeDasharray="8 6"
-        strokeOpacity="0.6"
-        className={animated ? 'origin-center animate-[spin_18s_linear_infinite]' : ''}
-      />
-
-      {/* Secondary Rotated Geometric Diamond */}
+      {/* Crisp Four-Point Starlight Core */}
       <path
-        d="M64 20 C68 46, 82 60, 108 64 C82 68, 68 82, 64 108 C60 82, 46 68, 20 64 C46 60, 60 46, 64 20 Z"
-        fill="url(#lloydSparkSecondary)"
-        transform="rotate(45 64 64) scale(0.76)"
-        style={{ transformOrigin: '64px 64px' }}
+        d="M64 22 C66.8 48.5, 79.5 61.2, 106 64 C79.5 66.8, 66.8 79.5, 64 106 C61.2 79.5, 48.5 66.8, 22 64 C48.5 61.2, 61.2 48.5, 64 22 Z"
+        fill="url(#lloydStar)"
       />
 
-      {/* Primary Four-Pointed Organic Neural Spark Star */}
-      <path
-        d="M64 10 C67.5 45, 83 60.5, 118 64 C83 67.5, 67.5 83, 64 118 C60.5 83, 45 67.5, 10 64 C45 60.5, 60.5 45, 64 10 Z"
-        fill="url(#lloydSparkPrimary)"
-        filter="url(#lloydSoftBloom)"
-      />
-
-      {/* Inner Luminous Core */}
-      <circle cx="64" cy="64" r="16" fill="url(#lloydCoreGlow)" />
+      {/* Specular Center Pinpoint */}
       <circle cx="64" cy="64" r="4.5" fill="#FFFFFF" />
     </svg>
   );

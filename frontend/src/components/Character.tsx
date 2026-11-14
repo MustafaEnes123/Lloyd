@@ -3,11 +3,14 @@ import type { AudioReactiveMetrics, CompanionState } from '../hooks/useLloydSock
 import {
   DEFAULT_CUSTOMIZATION,
   type CharacterCustomizationState,
+  type RobotEmotion,
 } from '../types/customization';
 
 export interface CharacterController {
   root: THREE.Group;
   applyCustomization: (custom: CharacterCustomizationState) => void;
+  setEmotion: (emotion: RobotEmotion) => void;
+  triggerWaveOrReaction: (emotion?: RobotEmotion) => void;
   update: (
     elapsed: number,
     delta: number,
@@ -19,432 +22,491 @@ export interface CharacterController {
   dispose: () => void;
 }
 
-function createToonGradientTexture(): THREE.DataTexture {
-  const data = new Uint8Array([
-    55, 55, 68, 255,
-    125, 130, 150, 255,
-    205, 212, 230, 255,
-    255, 255, 255, 255,
-  ]);
-  const texture = new THREE.DataTexture(data, 4, 1, THREE.RGBAFormat);
-  texture.minFilter = THREE.NearestFilter;
-  texture.magFilter = THREE.NearestFilter;
-  texture.needsUpdate = true;
-  return texture;
+function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  const clean = hex.replace('#', '');
+  const num = parseInt(
+    clean.length === 3 ? clean.replace(/(.)/g, '$1$1') : clean,
+    16
+  );
+  if (Number.isNaN(num)) return { r: 56, g: 189, b: 248 };
+  return {
+    r: (num >> 16) & 255,
+    g: (num >> 8) & 255,
+    b: num & 255,
+  };
+}
+
+function drawRoundedRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number
+) {
+  const radius = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.arcTo(x + w, y, x + w, y + h, radius);
+  ctx.arcTo(x + w, y + h, x, y + h, radius);
+  ctx.arcTo(x, y + h, x, y, radius);
+  ctx.arcTo(x, y, x + w, y, radius);
+  ctx.closePath();
+}
+
+/**
+ * Normalizes a partial SphereGeometry patch's UVs so that the entire [0..1]
+ * CanvasTexture maps cleanly edge-to-edge across the visor surface without cropping.
+ */
+function normalizeSpherePatchUVs(geometry: THREE.BufferGeometry) {
+  const uvAttr = geometry.attributes.uv;
+  if (!uvAttr) return;
+  let minU = Infinity;
+  let maxU = -Infinity;
+  let minV = Infinity;
+  let maxV = -Infinity;
+
+  for (let i = 0; i < uvAttr.count; i++) {
+    const u = uvAttr.getX(i);
+    const v = uvAttr.getY(i);
+    if (u < minU) minU = u;
+    if (u > maxU) maxU = u;
+    if (v < minV) minV = v;
+    if (v > maxV) maxV = v;
+  }
+
+  const rangeU = Math.max(0.0001, maxU - minU);
+  const rangeV = Math.max(0.0001, maxV - minV);
+
+  for (let i = 0; i < uvAttr.count; i++) {
+    const u = (uvAttr.getX(i) - minU) / rangeU;
+    const v = (uvAttr.getY(i) - minV) / rangeV;
+    uvAttr.setXY(i, u, v);
+  }
+  uvAttr.needsUpdate = true;
 }
 
 export function createAnimeCompanion(
   initialCustomization: CharacterCustomizationState = DEFAULT_CUSTOMIZATION
 ): CharacterController {
   const root = new THREE.Group();
-  root.position.set(0.35, -1.05, 0);
+  // Positioned and scaled so the entire robot sits comfortably in the center of the viewport
+  root.position.set(0, -0.58, 0);
+  root.scale.setScalar(0.84);
 
   let currentCustom: CharacterCustomizationState = { ...initialCustomization };
+  let activeEmotion: RobotEmotion = 'happy';
+  let reactionUntil = 0;
+  let waveUntil = 0;
 
-  const gradientMap = createToonGradientTexture();
-  const outlineMaterials: THREE.MeshBasicMaterial[] = [];
-
-  const addCelOutline = (mesh: THREE.Mesh, thickness = 1.045): THREE.Mesh => {
-    const outlineMat = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(currentCustom.outlineHex),
-      side: THREE.BackSide,
-    });
-    outlineMaterials.push(outlineMat);
-    const outlineMesh = new THREE.Mesh(mesh.geometry, outlineMat);
-    outlineMesh.scale.setScalar(thickness);
-    mesh.add(outlineMesh);
-    return outlineMesh;
-  };
-
-  // Core Toon & Emissive Materials
-  const skinMat = new THREE.MeshToonMaterial({
-    color: 0xffe9dc,
-    gradientMap,
-  });
-  const hairMainMat = new THREE.MeshToonMaterial({
+  // ==========================================================================
+  // 1. HIGH-CRAFT AEROSPACE ROBOT MATERIALS
+  // ==========================================================================
+  const shellPrimaryMat = new THREE.MeshPhysicalMaterial({
     color: new THREE.Color(currentCustom.hairPrimaryHex),
-    gradientMap,
-  });
-  const hairAccentMat = new THREE.MeshToonMaterial({
-    color: new THREE.Color(currentCustom.hairAccentHex),
-    emissive: new THREE.Color(currentCustom.hairAccentHex),
-    emissiveIntensity: 0.35,
-    gradientMap,
-  });
-  const jacketMat = new THREE.MeshToonMaterial({
-    color: new THREE.Color(currentCustom.outfitJacketHex),
-    gradientMap,
-  });
-  const innerShirtMat = new THREE.MeshToonMaterial({
-    color: 0x1e293b,
-    gradientMap,
-  });
-  const cyberTrimMat = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(currentCustom.cyberAccentHex),
-    emissive: new THREE.Color(currentCustom.cyberAccentHex),
-    emissiveIntensity: currentCustom.eyeLuminescence,
     roughness: 0.2,
+    metalness: 0.12,
+    clearcoat: 0.9,
+    clearcoatRoughness: 0.1,
+    reflectivity: 0.95,
+  });
+
+  const shellSecondaryMat = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(currentCustom.outfitJacketHex),
+    roughness: 0.32,
+    metalness: 0.68,
+  });
+
+  const darkChassisMat = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(currentCustom.outlineHex),
+    roughness: 0.38,
     metalness: 0.8,
   });
-  const secondaryTrimMat = new THREE.MeshStandardMaterial({
+
+  const accentGlowMat = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(currentCustom.cyberAccentHex),
+    emissive: new THREE.Color(currentCustom.cyberAccentHex),
+    emissiveIntensity: currentCustom.eyeLuminescence * 1.2,
+    roughness: 0.15,
+    metalness: 0.4,
+  });
+
+  const secondaryGlowMat = new THREE.MeshStandardMaterial({
     color: new THREE.Color(currentCustom.auraRingHex),
     emissive: new THREE.Color(currentCustom.auraRingHex),
-    emissiveIntensity: 1.2,
-    roughness: 0.25,
-    metalness: 0.7,
+    emissiveIntensity: currentCustom.eyeLuminescence,
+    roughness: 0.2,
+    metalness: 0.4,
   });
 
-  // Body hierarchy groups
-  const hipsGroup = new THREE.Group();
-  hipsGroup.position.set(0, 1.05, 0);
-  root.add(hipsGroup);
+  const trimAccentMat = new THREE.MeshPhysicalMaterial({
+    color: new THREE.Color(currentCustom.hairAccentHex),
+    emissive: new THREE.Color(currentCustom.hairAccentHex),
+    emissiveIntensity: 0.4,
+    roughness: 0.22,
+    metalness: 0.55,
+    clearcoat: 0.7,
+  });
+
+  // ==========================================================================
+  // 2. CURVED 60FPS OLED VISOR FACE DISPLAY (1024 x 512)
+  // ==========================================================================
+  const faceCanvas = document.createElement('canvas');
+  faceCanvas.width = 1024;
+  faceCanvas.height = 512;
+  const faceCtx = faceCanvas.getContext('2d')!;
+
+  const faceTexture = new THREE.CanvasTexture(faceCanvas);
+  faceTexture.colorSpace = THREE.SRGBColorSpace;
+  faceTexture.minFilter = THREE.LinearFilter;
+  faceTexture.magFilter = THREE.LinearFilter;
+
+  const visorScreenMat = new THREE.MeshBasicMaterial({
+    map: faceTexture,
+  });
+
+  const visorGlassMat = new THREE.MeshPhysicalMaterial({
+    color: 0x050814,
+    roughness: 0.05,
+    metalness: 0.1,
+    transparent: true,
+    opacity: 0.18,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.04,
+    reflectivity: 1.0,
+  });
+
+  // ==========================================================================
+  // 3. ROBOT BODY HIERARCHY: HOVER POD -> TORSO -> NECK -> HEAD -> ARMS
+  // ==========================================================================
+  const hoverGroup = new THREE.Group();
+  hoverGroup.position.set(0, 0.52, 0);
+  root.add(hoverGroup);
 
   const torsoGroup = new THREE.Group();
-  hipsGroup.add(torsoGroup);
+  hoverGroup.add(torsoGroup);
 
-  // Upper Torso (Stylized Techwear Jacket)
-  const chestGeo = new THREE.CylinderGeometry(0.27, 0.21, 0.72, 16);
-  const chestMesh = new THREE.Mesh(chestGeo, jacketMat);
-  chestMesh.position.set(0, 0.36, 0);
-  chestMesh.castShadow = true;
-  addCelOutline(chestMesh, 1.04);
-  torsoGroup.add(chestMesh);
+  // --- 3.1 Sculpted Rounded Aerospace Torso (EVE / Astro-inspired silhouette) ---
+  const torsoBodyGeo = new THREE.SphereGeometry(0.34, 48, 36);
+  torsoBodyGeo.scale(0.96, 1.18, 0.78);
+  const torsoBodyMesh = new THREE.Mesh(torsoBodyGeo, shellPrimaryMat);
+  torsoBodyMesh.position.set(0, 0.28, 0);
+  torsoBodyMesh.castShadow = true;
+  torsoBodyMesh.receiveShadow = true;
+  torsoGroup.add(torsoBodyMesh);
 
-  // High Cyber Collar
-  const collarGeo = new THREE.CylinderGeometry(0.24, 0.26, 0.18, 16, 1, true);
-  const collarMat = new THREE.MeshToonMaterial({
-    color: new THREE.Color(currentCustom.outfitJacketHex),
+  // Sleek Dark Shoulder Collar & Upper Chest Yoke
+  const yokeGeo = new THREE.SphereGeometry(0.344, 40, 24, 0, Math.PI * 2, 0, Math.PI * 0.36);
+  yokeGeo.scale(0.97, 1.18, 0.79);
+  const yokeMesh = new THREE.Mesh(yokeGeo, shellSecondaryMat);
+  yokeMesh.position.set(0, 0.285, 0);
+  torsoGroup.add(yokeMesh);
+
+  // Lower Hover Propulsion Thruster Bell & Anti-Gravity Plume
+  const thrusterBellGeo = new THREE.CylinderGeometry(0.18, 0.09, 0.16, 32);
+  const thrusterBell = new THREE.Mesh(thrusterBellGeo, darkChassisMat);
+  thrusterBell.position.set(0, -0.12, 0);
+  torsoGroup.add(thrusterBell);
+
+  const waistRingGeo = new THREE.TorusGeometry(0.21, 0.012, 14, 48);
+  const waistRing = new THREE.Mesh(waistRingGeo, trimAccentMat);
+  waistRing.rotation.x = Math.PI / 2;
+  waistRing.position.set(0, -0.04, 0);
+  torsoGroup.add(waistRing);
+
+  const thrusterPlumeGroup = new THREE.Group();
+  thrusterPlumeGroup.position.set(0, -0.2, 0);
+  torsoGroup.add(thrusterPlumeGroup);
+
+  const plumeConeGeo = new THREE.ConeGeometry(0.085, 0.28, 24, 1, true);
+  const plumeMat = new THREE.MeshBasicMaterial({
+    color: new THREE.Color(currentCustom.cyberAccentHex),
+    transparent: true,
+    opacity: 0.55,
     side: THREE.DoubleSide,
-    gradientMap,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
   });
-  const collarMesh = new THREE.Mesh(collarGeo, collarMat);
-  collarMesh.position.set(0, 0.73, -0.01);
-  torsoGroup.add(collarMesh);
+  const plumeCone = new THREE.Mesh(plumeConeGeo, plumeMat);
+  plumeCone.rotation.x = Math.PI;
+  plumeCone.position.y = -0.12;
+  thrusterPlumeGroup.add(plumeCone);
 
-  // Glowing Chest Reactor Core (Enes Custom Neural Spark Emblem)
-  const coreOuterGeo = new THREE.OctahedronGeometry(0.085, 1);
-  const coreMesh = new THREE.Mesh(coreOuterGeo, cyberTrimMat);
-  coreMesh.position.set(0, 0.46, 0.24);
-  coreMesh.scale.set(1, 1.25, 0.45);
-  torsoGroup.add(coreMesh);
+  const thrusterRingGeo = new THREE.TorusGeometry(0.08, 0.007, 12, 32);
+  const thrusterRing1 = new THREE.Mesh(thrusterRingGeo, accentGlowMat);
+  thrusterRing1.rotation.x = Math.PI / 2;
+  thrusterRing1.position.y = -0.03;
+  thrusterPlumeGroup.add(thrusterRing1);
 
-  // Jacket Neon Lapel Strips
-  const stripGeo = new THREE.BoxGeometry(0.022, 0.56, 0.02);
-  const leftStrip = new THREE.Mesh(stripGeo, cyberTrimMat);
-  leftStrip.position.set(-0.12, 0.38, 0.23);
-  leftStrip.rotation.z = 0.08;
-  torsoGroup.add(leftStrip);
+  const thrusterRing2 = new THREE.Mesh(thrusterRingGeo, secondaryGlowMat);
+  thrusterRing2.rotation.x = Math.PI / 2;
+  thrusterRing2.scale.setScalar(0.68);
+  thrusterRing2.position.y = -0.11;
+  thrusterPlumeGroup.add(thrusterRing2);
 
-  const rightStrip = new THREE.Mesh(stripGeo, cyberTrimMat);
-  rightStrip.position.set(0.12, 0.38, 0.23);
-  rightStrip.rotation.z = -0.08;
-  torsoGroup.add(rightStrip);
+  // Chest Glowing Accent Seams
+  const seamGeo = new THREE.CapsuleGeometry(0.009, 0.22, 8, 12);
+  const leftSeam = new THREE.Mesh(seamGeo, trimAccentMat);
+  leftSeam.position.set(-0.18, 0.28, 0.235);
+  leftSeam.rotation.z = -0.18;
+  leftSeam.rotation.x = 0.12;
+  torsoGroup.add(leftSeam);
 
-  // Neck
-  const neckGeo = new THREE.CylinderGeometry(0.095, 0.11, 0.2, 14);
-  const neckMesh = new THREE.Mesh(neckGeo, skinMat);
-  neckMesh.position.set(0, 0.78, 0);
-  addCelOutline(neckMesh, 1.05);
-  torsoGroup.add(neckMesh);
+  const rightSeam = new THREE.Mesh(seamGeo, trimAccentMat);
+  rightSeam.position.set(0.18, 0.28, 0.235);
+  rightSeam.rotation.z = 0.18;
+  rightSeam.rotation.x = 0.12;
+  torsoGroup.add(rightSeam);
 
-  // Head Group
+  // --- 3.2 Central Chest Gyroscope Reactor Core ---
+  const reactorGroup = new THREE.Group();
+  reactorGroup.position.set(0, 0.31, 0.258);
+  torsoGroup.add(reactorGroup);
+
+  const reactorBezelGeo = new THREE.TorusGeometry(0.082, 0.014, 16, 40);
+  const reactorBezel = new THREE.Mesh(reactorBezelGeo, darkChassisMat);
+  reactorGroup.add(reactorBezel);
+
+  const reactorBackGeo = new THREE.CircleGeometry(0.08, 32);
+  const reactorBack = new THREE.Mesh(
+    reactorBackGeo,
+    new THREE.MeshBasicMaterial({ color: 0x040711 })
+  );
+  reactorBack.position.z = -0.008;
+  reactorGroup.add(reactorBack);
+
+  const gyroOuterGeo = new THREE.TorusGeometry(0.058, 0.006, 12, 32);
+  const gyroOuter = new THREE.Mesh(gyroOuterGeo, secondaryGlowMat);
+  reactorGroup.add(gyroOuter);
+
+  const gyroInnerGeo = new THREE.OctahedronGeometry(0.036, 1);
+  const coreMesh = new THREE.Mesh(gyroInnerGeo, accentGlowMat);
+  reactorGroup.add(coreMesh);
+
+  // --- 3.3 Precision Neck Gimbal ---
+  const neckGroup = new THREE.Group();
+  neckGroup.position.set(0, 0.66, 0);
+  torsoGroup.add(neckGroup);
+
+  const neckCylGeo = new THREE.CylinderGeometry(0.1, 0.12, 0.11, 24);
+  const neckCyl = new THREE.Mesh(neckCylGeo, darkChassisMat);
+  neckCyl.position.y = 0.03;
+  neckGroup.add(neckCyl);
+
+  const neckRingGeo = new THREE.TorusGeometry(0.108, 0.008, 10, 28);
+  const neckRing = new THREE.Mesh(neckRingGeo, accentGlowMat);
+  neckRing.rotation.x = Math.PI / 2;
+  neckRing.position.y = 0.04;
+  neckGroup.add(neckRing);
+
+  // ==========================================================================
+  // 4. SCULPTED ROBOT HEAD & NORMALIZED FULL-FRAME OLED VISOR
+  // ==========================================================================
   const headGroup = new THREE.Group();
-  headGroup.position.set(0, 1.06, 0.02);
+  headGroup.position.set(0, 1.0, 0.02);
   torsoGroup.add(headGroup);
 
-  // Sculpted Anime Cranium + Jawline
-  const craniumGeo = new THREE.SphereGeometry(0.29, 28, 24);
-  craniumGeo.scale(0.95, 1.04, 0.96);
-  const craniumMesh = new THREE.Mesh(craniumGeo, skinMat);
-  craniumMesh.castShadow = true;
-  addCelOutline(craniumMesh, 1.038);
-  headGroup.add(craniumMesh);
+  // Rounded Aerospace Cranial Shell
+  const headGeo = new THREE.SphereGeometry(0.36, 48, 36);
+  headGeo.scale(1.18, 0.92, 0.96);
+  const headShell = new THREE.Mesh(headGeo, shellPrimaryMat);
+  headShell.castShadow = true;
+  headShell.receiveShadow = true;
+  headGroup.add(headShell);
 
-  // Anime Chin taper
-  const chinGeo = new THREE.ConeGeometry(0.22, 0.26, 20);
-  const chinMesh = new THREE.Mesh(chinGeo, skinMat);
-  chinMesh.rotation.x = Math.PI;
-  chinMesh.position.set(0, -0.15, 0.04);
-  chinMesh.scale.set(0.95, 0.85, 0.88);
-  headGroup.add(chinMesh);
+  // Forehead Telemetry Sensor Crest
+  const crestGeo = new THREE.CapsuleGeometry(0.016, 0.12, 8, 16);
+  crestGeo.rotateZ(Math.PI / 2);
+  const crestMesh = new THREE.Mesh(crestGeo, trimAccentMat);
+  crestMesh.position.set(0, 0.295, 0.155);
+  headGroup.add(crestMesh);
 
-  // Subtle Anime Nose
-  const noseGeo = new THREE.ConeGeometry(0.025, 0.065, 8);
-  const noseMesh = new THREE.Mesh(noseGeo, skinMat);
-  noseMesh.rotation.x = Math.PI * 0.42;
-  noseMesh.position.set(0, -0.03, 0.285);
-  headGroup.add(noseMesh);
+  // Dark Recessed Visor Bezel
+  const bezelGeo = new THREE.SphereGeometry(
+    0.35,
+    44,
+    32,
+    Math.PI * 0.5 - 0.88,
+    1.76,
+    Math.PI * 0.5 - 0.52,
+    1.04
+  );
+  bezelGeo.scale(1.18, 0.92, 0.98);
+  const bezelMesh = new THREE.Mesh(bezelGeo, darkChassisMat);
+  bezelMesh.position.set(0, -0.01, 0.012);
+  headGroup.add(bezelMesh);
 
-  // Ears + Cyber Ear-Cuffs
-  const earGeo = new THREE.SphereGeometry(0.055, 12, 12);
-  earGeo.scale(0.45, 1.15, 0.7);
-  const leftEar = new THREE.Mesh(earGeo, skinMat);
-  leftEar.position.set(-0.275, -0.02, -0.01);
-  headGroup.add(leftEar);
+  // Curved Emissive OLED Visor Screen with Normalized [0..1] Patch UVs!
+  const visorGeo = new THREE.SphereGeometry(
+    0.352,
+    48,
+    32,
+    Math.PI * 0.5 - 0.82,
+    1.64,
+    Math.PI * 0.5 - 0.46,
+    0.92
+  );
+  visorGeo.scale(1.18, 0.92, 0.99);
+  normalizeSpherePatchUVs(visorGeo);
 
-  const rightEar = new THREE.Mesh(earGeo, skinMat);
-  rightEar.position.set(0.275, -0.02, -0.01);
-  headGroup.add(rightEar);
+  const visorScreen = new THREE.Mesh(visorGeo, visorScreenMat);
+  visorScreen.position.set(0, -0.01, 0.016);
+  headGroup.add(visorScreen);
 
-  const cuffGeo = new THREE.TorusGeometry(0.038, 0.01, 8, 18);
-  const leftCuff = new THREE.Mesh(cuffGeo, cyberTrimMat);
-  leftCuff.position.set(-0.29, 0.01, -0.01);
-  leftCuff.rotation.y = Math.PI / 2;
-  headGroup.add(leftCuff);
+  // Smoked Glass Clearcoat Lens over the Visor
+  const visorGlassGeo = visorGeo.clone();
+  const visorGlass = new THREE.Mesh(visorGlassGeo, visorGlassMat);
+  visorGlass.position.set(0, -0.01, 0.02);
+  headGroup.add(visorGlass);
 
-  const rightCuff = new THREE.Mesh(cuffGeo, secondaryTrimMat);
-  rightCuff.position.set(0.29, 0.01, -0.01);
-  rightCuff.rotation.y = Math.PI / 2;
-  headGroup.add(rightCuff);
+  // --- 4.1 Articulated Ear-Pods & Telemetry Antennas ---
+  const createEarPod = (side: -1 | 1) => {
+    const earGroup = new THREE.Group();
+    earGroup.position.set(side * 0.415, 0.0, 0.0);
+    headGroup.add(earGroup);
 
-  // Shared Iris Materials so customization updates both eyes seamlessly
-  const irisBaseMat = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(currentCustom.eyeIrisHex),
-    emissive: new THREE.Color(currentCustom.eyeIrisHex),
-    emissiveIntensity: currentCustom.eyeLuminescence * 0.55,
-    roughness: 0.15,
-  });
-  const irisGlowMat = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(currentCustom.eyeIrisHex),
-    emissive: new THREE.Color(currentCustom.eyeIrisHex),
-    emissiveIntensity: currentCustom.eyeLuminescence,
-    roughness: 0.1,
-  });
+    const podGeo = new THREE.CylinderGeometry(0.095, 0.078, 0.065, 24);
+    podGeo.rotateZ(Math.PI / 2);
+    const podMesh = new THREE.Mesh(podGeo, shellSecondaryMat);
+    podMesh.castShadow = true;
+    earGroup.add(podMesh);
 
-  // Expressive Anime Eyes (Left & Right)
-  const createAnimeEye = (side: -1 | 1) => {
-    const eyeGroup = new THREE.Group();
-    eyeGroup.position.set(side * 0.105, 0.025, 0.248);
-    eyeGroup.rotation.y = side * 0.16;
+    const earRingGeo = new THREE.TorusGeometry(0.082, 0.01, 12, 28);
+    earRingGeo.rotateY(Math.PI / 2);
+    const earRing = new THREE.Mesh(earRingGeo, accentGlowMat);
+    earRing.position.x = side * 0.028;
+    earGroup.add(earRing);
 
-    const scleraGeo = new THREE.SphereGeometry(0.058, 18, 16);
-    scleraGeo.scale(1.12, 1.25, 0.35);
-    const scleraMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-    const sclera = new THREE.Mesh(scleraGeo, scleraMat);
-    eyeGroup.add(sclera);
+    const antennaPivot = new THREE.Group();
+    antennaPivot.position.set(side * 0.02, 0.05, 0);
+    earGroup.add(antennaPivot);
 
-    const irisGroup = new THREE.Group();
-    const irisGeo = new THREE.CircleGeometry(0.044, 24);
-    const iris = new THREE.Mesh(irisGeo, irisBaseMat);
-    iris.position.z = 0.021;
-    iris.scale.set(0.95, 1.15, 1);
-    irisGroup.add(iris);
+    const stalkGeo = new THREE.CapsuleGeometry(0.013, 0.14, 8, 12);
+    const stalk = new THREE.Mesh(stalkGeo, trimAccentMat);
+    stalk.position.set(side * 0.018, 0.09, -0.015);
+    stalk.rotation.z = -side * 0.16;
+    stalk.rotation.x = -0.12;
+    antennaPivot.add(stalk);
 
-    const glowIrisGeo = new THREE.CircleGeometry(0.034, 20);
-    const glowIris = new THREE.Mesh(glowIrisGeo, irisGlowMat);
-    glowIris.position.set(0, -0.006, 0.022);
-    irisGroup.add(glowIris);
+    const tipGeo = new THREE.SphereGeometry(0.022, 14, 14);
+    const tip = new THREE.Mesh(tipGeo, accentGlowMat);
+    tip.position.set(side * 0.035, 0.175, -0.03);
+    antennaPivot.add(tip);
 
-    const pupilGeo = new THREE.CircleGeometry(0.019, 16);
-    const pupilMat = new THREE.MeshBasicMaterial({ color: 0x090d16 });
-    const pupil = new THREE.Mesh(pupilGeo, pupilMat);
-    pupil.position.set(0, 0.002, 0.023);
-    pupil.scale.set(0.9, 1.15, 1);
-    irisGroup.add(pupil);
-
-    // Dual Anime Specular Catchlights
-    const specMainGeo = new THREE.CircleGeometry(0.011, 12);
-    const specMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-    const specMain = new THREE.Mesh(specMainGeo, specMat);
-    specMain.position.set(side * 0.014, 0.018, 0.024);
-    irisGroup.add(specMain);
-
-    const specSubGeo = new THREE.CircleGeometry(0.0055, 10);
-    const specSub = new THREE.Mesh(specSubGeo, specMat);
-    specSub.position.set(-side * 0.012, -0.014, 0.024);
-    irisGroup.add(specSub);
-
-    eyeGroup.add(irisGroup);
-
-    const lashGeo = new THREE.BoxGeometry(0.115, 0.016, 0.02);
-    const lashMat = new THREE.MeshBasicMaterial({ color: 0x0f172a });
-    const lash = new THREE.Mesh(lashGeo, lashMat);
-    lash.position.set(0, 0.068, 0.02);
-    lash.rotation.z = -side * 0.06;
-    eyeGroup.add(lash);
-
-    const lidGeo = new THREE.SphereGeometry(0.061, 16, 14);
-    lidGeo.scale(1.15, 1.28, 0.38);
-    const lidMesh = new THREE.Mesh(lidGeo, skinMat);
-    lidMesh.position.z = 0.003;
-    lidMesh.scale.y = 0.01;
-    lidMesh.visible = false;
-    eyeGroup.add(lidMesh);
-
-    const browGeo = new THREE.BoxGeometry(0.11, 0.014, 0.018);
-    const browMat = new THREE.MeshBasicMaterial({ color: 0x475569 });
-    const brow = new THREE.Mesh(browGeo, browMat);
-    brow.position.set(0, 0.105, 0.022);
-    brow.rotation.z = -side * 0.08;
-    eyeGroup.add(brow);
-
-    headGroup.add(eyeGroup);
-    return { eyeGroup, irisGroup, lidMesh, brow, lash };
+    return { earGroup, antennaPivot, tip };
   };
 
-  const leftEye = createAnimeEye(-1);
-  const rightEye = createAnimeEye(1);
+  const leftEar = createEarPod(-1);
+  const rightEar = createEarPod(1);
 
-  // Articulated Mouth & Vocal Lip-Sync Cavity
-  const mouthGroup = new THREE.Group();
-  mouthGroup.position.set(0, -0.115, 0.262);
-  headGroup.add(mouthGroup);
-
-  const mouthSmileLineGeo = new THREE.BoxGeometry(0.075, 0.009, 0.01);
-  const mouthLineMat = new THREE.MeshBasicMaterial({ color: 0x7c2d12 });
-  const mouthLine = new THREE.Mesh(mouthSmileLineGeo, mouthLineMat);
-  mouthGroup.add(mouthLine);
-
-  const mouthCavityGeo = new THREE.SphereGeometry(0.036, 16, 12);
-  mouthCavityGeo.scale(1.15, 0.85, 0.35);
-  const mouthCavityMat = new THREE.MeshBasicMaterial({ color: 0x991b1b });
-  const mouthCavity = new THREE.Mesh(mouthCavityGeo, mouthCavityMat);
-  mouthCavity.scale.set(0.8, 0.05, 1);
-  mouthGroup.add(mouthCavity);
-
-  const tongueGeo = new THREE.SphereGeometry(0.022, 12, 10);
-  const tongueMat = new THREE.MeshBasicMaterial({ color: 0xf43f5e });
-  const tongueMesh = new THREE.Mesh(tongueGeo, tongueMat);
-  tongueMesh.position.set(0, -0.008, 0.006);
-  mouthCavity.add(tongueMesh);
-
-  // Stylized Multi-Layered Anime Hair
-  const hairGroup = new THREE.Group();
-  headGroup.add(hairGroup);
-
-  const hairCapGeo = new THREE.SphereGeometry(0.308, 24, 20);
-  hairCapGeo.scale(0.98, 1.05, 1.0);
-  const hairCap = new THREE.Mesh(hairCapGeo, hairMainMat);
-  hairCap.position.set(0, 0.05, -0.025);
-  addCelOutline(hairCap, 1.03);
-  hairGroup.add(hairCap);
-
-  const hairSpikes: { mesh: THREE.Mesh; baseRotZ: number; baseRotX: number; phase: number }[] = [];
-  const createHairSpike = (
-    radius: number,
-    height: number,
-    pos: [number, number, number],
-    rot: [number, number, number],
-    isAccent = false
-  ) => {
-    const geo = new THREE.ConeGeometry(radius, height, 6);
-    geo.translate(0, -height * 0.42, 0);
-    const mat = isAccent ? hairAccentMat : hairMainMat;
-    const spike = new THREE.Mesh(geo, mat);
-    spike.position.set(...pos);
-    spike.rotation.set(...rot);
-    spike.castShadow = true;
-    addCelOutline(spike, 1.045);
-    hairGroup.add(spike);
-    hairSpikes.push({
-      mesh: spike,
-      baseRotZ: rot[2],
-      baseRotX: rot[0],
-      phase: Math.random() * Math.PI * 2,
-    });
-  };
-
-  createHairSpike(0.068, 0.27, [0.0, 0.27, 0.23], [0.22, 0, -0.08], true);
-  createHairSpike(0.062, 0.25, [-0.085, 0.26, 0.21], [0.2, 0, 0.22], false);
-  createHairSpike(0.062, 0.26, [0.09, 0.26, 0.21], [0.2, 0, -0.24], false);
-  createHairSpike(0.058, 0.29, [-0.18, 0.22, 0.16], [0.15, 0.2, 0.35], true);
-  createHairSpike(0.058, 0.29, [0.18, 0.22, 0.16], [0.15, -0.2, -0.35], false);
-  createHairSpike(0.065, 0.34, [-0.25, 0.14, 0.08], [0.08, 0.3, 0.28], false);
-  createHairSpike(0.065, 0.34, [0.25, 0.14, 0.08], [0.08, -0.3, -0.28], true);
-  createHairSpike(0.085, 0.32, [0.0, 0.35, -0.02], [-2.4, 0, 0.15], false);
-  createHairSpike(0.08, 0.3, [-0.14, 0.33, -0.06], [-2.2, 0.3, 0.45], true);
-  createHairSpike(0.08, 0.3, [0.14, 0.33, -0.06], [-2.2, -0.3, -0.45], false);
-  createHairSpike(0.075, 0.28, [-0.22, 0.24, -0.14], [-1.7, 0.4, 0.65], false);
-  createHairSpike(0.075, 0.28, [0.22, 0.24, -0.14], [-1.7, -0.4, -0.65], false);
-  createHairSpike(0.07, 0.26, [0.0, 0.15, -0.27], [-0.45, 0, 0], false);
-
-  // Articulated Arms & Hands
-  const createArm = (side: -1 | 1) => {
+  // ==========================================================================
+  // 5. ARTICULATED ROBOT ARMS & 3-FINGERED HANDS
+  // ==========================================================================
+  const createRobotArm = (side: -1 | 1) => {
     const shoulderGroup = new THREE.Group();
-    shoulderGroup.position.set(side * 0.31, 0.63, 0);
+    shoulderGroup.position.set(side * 0.355, 0.48, 0.0);
     torsoGroup.add(shoulderGroup);
 
-    const pauldronGeo = new THREE.SphereGeometry(0.085, 14, 12);
-    const pauldron = new THREE.Mesh(pauldronGeo, jacketMat);
-    addCelOutline(pauldron, 1.05);
+    const pauldronGeo = new THREE.SphereGeometry(0.082, 24, 20);
+    const pauldron = new THREE.Mesh(pauldronGeo, shellPrimaryMat);
+    pauldron.castShadow = true;
     shoulderGroup.add(pauldron);
 
-    const upperArmGeo = new THREE.CylinderGeometry(0.068, 0.058, 0.34, 12);
-    const upperArm = new THREE.Mesh(upperArmGeo, jacketMat);
-    upperArm.position.set(0, -0.17, 0);
-    addCelOutline(upperArm, 1.05);
+    const shoulderRingGeo = new THREE.TorusGeometry(0.068, 0.008, 10, 24);
+    const shoulderRing = new THREE.Mesh(shoulderRingGeo, trimAccentMat);
+    shoulderRing.rotation.y = Math.PI / 2;
+    shoulderRing.position.x = side * 0.018;
+    shoulderGroup.add(shoulderRing);
+
+    const upperArmGeo = new THREE.CylinderGeometry(0.04, 0.036, 0.21, 18);
+    const upperArm = new THREE.Mesh(upperArmGeo, darkChassisMat);
+    upperArm.position.set(0, -0.13, 0);
     shoulderGroup.add(upperArm);
 
     const elbowGroup = new THREE.Group();
-    elbowGroup.position.set(0, -0.34, 0);
+    elbowGroup.position.set(0, -0.24, 0);
     shoulderGroup.add(elbowGroup);
 
-    const forearmGeo = new THREE.CylinderGeometry(0.056, 0.046, 0.31, 12);
-    const forearm = new THREE.Mesh(forearmGeo, innerShirtMat);
-    forearm.position.set(0, -0.15, 0);
-    addCelOutline(forearm, 1.05);
+    const elbowBallGeo = new THREE.SphereGeometry(0.044, 16, 16);
+    const elbowBall = new THREE.Mesh(elbowBallGeo, shellSecondaryMat);
+    elbowGroup.add(elbowBall);
+
+    const forearmGeo = new THREE.CapsuleGeometry(0.052, 0.14, 12, 20);
+    const forearm = new THREE.Mesh(forearmGeo, shellPrimaryMat);
+    forearm.position.set(0, -0.12, 0);
+    forearm.castShadow = true;
     elbowGroup.add(forearm);
 
-    const wristGeo = new THREE.TorusGeometry(0.05, 0.009, 8, 18);
-    const wristBand = new THREE.Mesh(wristGeo, cyberTrimMat);
+    const wristGeo = new THREE.TorusGeometry(0.048, 0.008, 10, 24);
+    const wristBand = new THREE.Mesh(wristGeo, accentGlowMat);
     wristBand.rotation.x = Math.PI / 2;
-    wristBand.position.set(0, -0.28, 0);
+    wristBand.position.set(0, -0.21, 0);
     elbowGroup.add(wristBand);
 
-    const handGeo = new THREE.SphereGeometry(0.052, 12, 12);
-    handGeo.scale(0.85, 1.15, 0.65);
-    const hand = new THREE.Mesh(handGeo, skinMat);
-    hand.position.set(0, -0.34, 0.01);
-    addCelOutline(hand, 1.05);
-    elbowGroup.add(hand);
+    const handGroup = new THREE.Group();
+    handGroup.position.set(0, -0.26, 0.01);
+    elbowGroup.add(handGroup);
 
-    return { shoulderGroup, elbowGroup };
+    const palmGeo = new THREE.SphereGeometry(0.044, 16, 16);
+    palmGeo.scale(0.95, 0.85, 0.65);
+    const palm = new THREE.Mesh(palmGeo, shellSecondaryMat);
+    handGroup.add(palm);
+
+    const fingerGeo = new THREE.CapsuleGeometry(0.011, 0.026, 6, 10);
+    const f1 = new THREE.Mesh(fingerGeo, shellPrimaryMat);
+    f1.position.set(-0.018, -0.038, 0.008);
+    f1.rotation.z = 0.1;
+    handGroup.add(f1);
+
+    const f2 = new THREE.Mesh(fingerGeo, shellPrimaryMat);
+    f2.position.set(0.0, -0.042, 0.01);
+    handGroup.add(f2);
+
+    const f3 = new THREE.Mesh(fingerGeo, shellPrimaryMat);
+    f3.position.set(0.018, -0.038, 0.008);
+    f3.rotation.z = -0.1;
+    handGroup.add(f3);
+
+    const thumb = new THREE.Mesh(fingerGeo, trimAccentMat);
+    thumb.position.set(-side * 0.035, -0.016, 0.018);
+    thumb.rotation.z = -side * 0.55;
+    handGroup.add(thumb);
+
+    return { shoulderGroup, elbowGroup, handGroup };
   };
 
-  const leftArm = createArm(-1);
-  const rightArm = createArm(1);
+  const leftArm = createRobotArm(-1);
+  const rightArm = createRobotArm(1);
 
-  const pelvisGeo = new THREE.CylinderGeometry(0.21, 0.19, 0.22, 14);
-  const pelvisMesh = new THREE.Mesh(pelvisGeo, innerShirtMat);
-  pelvisMesh.position.set(0, -0.08, 0);
-  addCelOutline(pelvisMesh, 1.04);
-  hipsGroup.add(pelvisMesh);
-
-  const createLeg = (side: -1 | 1) => {
-    const legGeo = new THREE.CylinderGeometry(0.082, 0.062, 0.92, 12);
-    const legMesh = new THREE.Mesh(legGeo, jacketMat);
-    legMesh.position.set(side * 0.11, -0.56, 0);
-    addCelOutline(legMesh, 1.04);
-    hipsGroup.add(legMesh);
-  };
-  createLeg(-1);
-  createLeg(1);
-
-  // Floating Cyber Halo Ring behind Lloyd's upper back
+  // ==========================================================================
+  // 6. ORBITAL HALO & BASE CONTAINMENT RINGS
+  // ==========================================================================
   const haloGroup = new THREE.Group();
-  haloGroup.position.set(0, 0.65, -0.28);
+  haloGroup.position.set(0, 0.44, -0.24);
   torsoGroup.add(haloGroup);
 
-  const haloRingGeo = new THREE.TorusGeometry(0.38, 0.008, 12, 48);
-  const haloRing = new THREE.Mesh(haloRingGeo, cyberTrimMat);
+  const haloRingGeo = new THREE.TorusGeometry(0.36, 0.006, 14, 64);
+  const haloRing = new THREE.Mesh(haloRingGeo, accentGlowMat);
   haloGroup.add(haloRing);
 
-  const shardGeo = new THREE.OctahedronGeometry(0.032, 0);
+  const shardGeo = new THREE.OctahedronGeometry(0.022, 0);
   for (let i = 0; i < 6; i++) {
     const angle = (i / 6) * Math.PI * 2;
-    const shard = new THREE.Mesh(shardGeo, i % 2 === 0 ? cyberTrimMat : secondaryTrimMat);
-    shard.position.set(Math.cos(angle) * 0.46, Math.sin(angle) * 0.46, 0);
-    shard.scale.set(0.6, 1.8, 0.6);
+    const shard = new THREE.Mesh(
+      shardGeo,
+      i % 2 === 0 ? accentGlowMat : secondaryGlowMat
+    );
+    shard.position.set(Math.cos(angle) * 0.42, Math.sin(angle) * 0.42, 0);
+    shard.scale.set(0.55, 1.65, 0.55);
     shard.rotation.z = angle;
     haloGroup.add(shard);
   }
 
-  // Base Glowing Telemetry Aura Ring
   const baseRingGroup = new THREE.Group();
-  baseRingGroup.position.set(0, 0.03, 0);
+  baseRingGroup.position.set(0, 0.02, 0);
   root.add(baseRingGroup);
 
-  const baseRingGeo = new THREE.RingGeometry(0.56, 0.61, 64);
+  const baseRingGeo = new THREE.RingGeometry(0.48, 0.51, 64);
   const baseRingMat = new THREE.MeshBasicMaterial({
     color: new THREE.Color(currentCustom.auraRingHex),
     side: THREE.DoubleSide,
@@ -455,67 +517,419 @@ export function createAnimeCompanion(
   baseRing.rotation.x = -Math.PI / 2;
   baseRingGroup.add(baseRing);
 
-  const outerPulseGeo = new THREE.RingGeometry(0.66, 0.688, 64);
+  const outerPulseGeo = new THREE.RingGeometry(0.58, 0.6, 64);
   const outerPulseMat = new THREE.MeshBasicMaterial({
     color: new THREE.Color(currentCustom.cyberAccentHex),
     side: THREE.DoubleSide,
     transparent: true,
-    opacity: 0.3,
+    opacity: 0.28,
   });
   const outerPulseRing = new THREE.Mesh(outerPulseGeo, outerPulseMat);
   outerPulseRing.rotation.x = -Math.PI / 2;
   baseRingGroup.add(outerPulseRing);
 
-  // Orbiting Thinking Particle Ring
   const thinkingGroup = new THREE.Group();
-  thinkingGroup.position.set(0, 2.25, 0);
+  thinkingGroup.position.set(0, 2.02, 0);
   root.add(thinkingGroup);
 
   const orbitNodes: THREE.Mesh[] = [];
-  const nodeGeo = new THREE.OctahedronGeometry(0.028, 0);
+  const nodeGeo = new THREE.OctahedronGeometry(0.024, 0);
   for (let i = 0; i < 8; i++) {
-    const node = new THREE.Mesh(nodeGeo, i % 2 === 0 ? cyberTrimMat : secondaryTrimMat);
+    const node = new THREE.Mesh(
+      nodeGeo,
+      i % 2 === 0 ? accentGlowMat : secondaryGlowMat
+    );
     const a = (i / 8) * Math.PI * 2;
-    node.position.set(Math.cos(a) * 0.48, Math.sin(a * 2) * 0.06, Math.sin(a) * 0.48);
+    node.position.set(
+      Math.cos(a) * 0.42,
+      Math.sin(a * 2) * 0.04,
+      Math.sin(a) * 0.42
+    );
     thinkingGroup.add(node);
     orbitNodes.push(node);
   }
 
-  // Real-time Customization Updater
-  const applyCustomization = (custom: CharacterCustomizationState) => {
-    currentCustom = { ...custom };
-    hairMainMat.color.set(custom.hairPrimaryHex);
-    hairAccentMat.color.set(custom.hairAccentHex);
-    hairAccentMat.emissive.set(custom.hairAccentHex);
+  // ==========================================================================
+  // 7. 60FPS OLED VISOR FACE ENGINE (EYES, BROWS, CHEEKS, SMILE & LIP-SYNC)
+  // ==========================================================================
+  let smoothEyeX = 0;
+  let smoothEyeY = 0;
+  let smoothMouthOpen = 0;
+  let smoothSmile = 1.0;
 
-    irisBaseMat.color.set(custom.eyeIrisHex);
-    irisBaseMat.emissive.set(custom.eyeIrisHex);
-    irisBaseMat.emissiveIntensity = custom.eyeLuminescence * 0.55;
+  const renderVisorFace = (
+    elapsed: number,
+    state: CompanionState,
+    audio: AudioReactiveMetrics,
+    pointer: { x: number; y: number },
+    micLevel: number,
+    isBlinking: boolean,
+    blinkProgress: number
+  ) => {
+    const W = faceCanvas.width;
+    const H = faceCanvas.height;
 
-    irisGlowMat.color.set(custom.eyeIrisHex);
-    irisGlowMat.emissive.set(custom.eyeIrisHex);
-    irisGlowMat.emissiveIntensity = custom.eyeLuminescence;
+    // 1. Deep OLED Screen Background with subtle edge vignette
+    const bgGrad = faceCtx.createRadialGradient(
+      W * 0.5,
+      H * 0.5,
+      30,
+      W * 0.5,
+      H * 0.5,
+      W * 0.52
+    );
+    bgGrad.addColorStop(0, '#0a1328');
+    bgGrad.addColorStop(0.7, '#050914');
+    bgGrad.addColorStop(1, '#02040a');
+    faceCtx.fillStyle = bgGrad;
+    faceCtx.fillRect(0, 0, W, H);
 
-    jacketMat.color.set(custom.outfitJacketHex);
-    collarMat.color.set(custom.outfitJacketHex);
+    // Subtle OLED pixel scanlines
+    faceCtx.fillStyle = 'rgba(255, 255, 255, 0.018)';
+    for (let y = 0; y < H; y += 6) {
+      faceCtx.fillRect(0, y, W, 2);
+    }
 
-    cyberTrimMat.color.set(custom.cyberAccentHex);
-    cyberTrimMat.emissive.set(custom.cyberAccentHex);
-    cyberTrimMat.emissiveIntensity = custom.eyeLuminescence;
+    let phosphorHex = currentCustom.eyeIrisHex || '#38bdf8';
+    if (state === 'LISTENING') {
+      phosphorHex = '#34d399';
+    } else if (state === 'THINKING') {
+      phosphorHex = '#a78bfa';
+    }
+    const rgb = hexToRgb(phosphorHex);
+    const glowColor = `rgb(${rgb.r}, ${rgb.g}, ${rgb.b})`;
+    const softGlow = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.38)`;
+    const coreWhite = '#f8fafc';
 
-    secondaryTrimMat.color.set(custom.auraRingHex);
-    secondaryTrimMat.emissive.set(custom.auraRingHex);
+    const targetX = THREE.MathUtils.clamp(pointer.x * 42, -45, 45);
+    const targetY = THREE.MathUtils.clamp(-pointer.y * 24, -26, 26);
+    smoothEyeX += (targetX - smoothEyeX) * 0.18;
+    smoothEyeY += (targetY - smoothEyeY) * 0.18;
 
-    baseRingMat.color.set(custom.auraRingHex);
-    outerPulseMat.color.set(custom.cyberAccentHex);
+    const rawOpen = state === 'SPEAKING' ? Math.max(0.08, audio.mouthOpen) : 0;
+    smoothMouthOpen += (rawOpen - smoothMouthOpen) * 0.34;
 
-    outlineMaterials.forEach((mat) => {
-      mat.color.set(custom.outlineHex);
-    });
+    const isReacting = elapsed < reactionUntil;
+    const effectiveEmotion: RobotEmotion = activeEmotion;
+
+    const targetSmile =
+      effectiveEmotion === 'happy' ||
+      effectiveEmotion === 'excited' ||
+      state === 'SPEAKING'
+        ? 1.0
+        : effectiveEmotion === 'curious'
+        ? 0.35
+        : 0.75;
+    smoothSmile += (targetSmile - smoothSmile) * 0.14;
+
+    // 2. Draw Left & Right Expressive Robot Eyes (centered in the 1024x512 UV space)
+    const drawEye = (side: -1 | 1) => {
+      const cx = W * 0.5 + side * 195 + smoothEyeX;
+      const cy = H * 0.44 + smoothEyeY;
+
+      faceCtx.save();
+      faceCtx.translate(cx, cy);
+
+      const isWinkingThisEye = effectiveEmotion === 'wink' && side === 1;
+      const isHappyArcEye =
+        effectiveEmotion === 'excited' ||
+        (isReacting && effectiveEmotion === 'happy');
+      const isZenEye = effectiveEmotion === 'zen';
+
+      // Expressive Eyebrow
+      faceCtx.save();
+      let browY = -92;
+      let browRot = side * -0.05;
+      if (state === 'LISTENING') {
+        browY = -102 - micLevel * 10;
+        browRot = side * -0.02;
+      } else if (state === 'THINKING' || effectiveEmotion === 'curious') {
+        browY = side === 1 ? -104 : -84;
+        browRot = side === 1 ? -0.18 : 0.14;
+      } else if (state === 'SPEAKING') {
+        browY = -96 - smoothMouthOpen * 12;
+        browRot = side * (-0.07 - smoothMouthOpen * 0.05);
+      }
+      faceCtx.translate(0, browY);
+      faceCtx.rotate(browRot);
+      faceCtx.shadowColor = glowColor;
+      faceCtx.shadowBlur = 18;
+      faceCtx.strokeStyle = glowColor;
+      faceCtx.lineWidth = 11;
+      faceCtx.lineCap = 'round';
+      faceCtx.beginPath();
+      faceCtx.moveTo(-52, 5);
+      faceCtx.quadraticCurveTo(0, -10, 52, 5);
+      faceCtx.stroke();
+      faceCtx.restore();
+
+      if (isWinkingThisEye || isZenEye) {
+        faceCtx.shadowColor = glowColor;
+        faceCtx.shadowBlur = 26;
+        faceCtx.strokeStyle = coreWhite;
+        faceCtx.lineWidth = 18;
+        faceCtx.lineCap = 'round';
+        faceCtx.beginPath();
+        if (isWinkingThisEye) {
+          faceCtx.moveTo(-60, 10);
+          faceCtx.quadraticCurveTo(0, -38, 60, 10);
+        } else {
+          faceCtx.moveTo(-58, -4);
+          faceCtx.quadraticCurveTo(0, 28, 58, -4);
+        }
+        faceCtx.stroke();
+        faceCtx.restore();
+        return;
+      }
+
+      if (isHappyArcEye && !isBlinking) {
+        faceCtx.shadowColor = glowColor;
+        faceCtx.shadowBlur = 32;
+        faceCtx.strokeStyle = glowColor;
+        faceCtx.lineWidth = 24;
+        faceCtx.lineCap = 'round';
+        faceCtx.beginPath();
+        faceCtx.moveTo(-64, 20);
+        faceCtx.quadraticCurveTo(0, -52, 64, 20);
+        faceCtx.stroke();
+
+        faceCtx.strokeStyle = coreWhite;
+        faceCtx.lineWidth = 11;
+        faceCtx.beginPath();
+        faceCtx.moveTo(-58, 17);
+        faceCtx.quadraticCurveTo(0, -46, 58, 17);
+        faceCtx.stroke();
+        faceCtx.restore();
+        return;
+      }
+
+      let eyeW = 122;
+      let eyeH = 136;
+      if (state === 'LISTENING') {
+        eyeW = 128 + micLevel * 12;
+        eyeH = 146 + micLevel * 14;
+      } else if (state === 'THINKING') {
+        eyeH = 112;
+      } else if (effectiveEmotion === 'curious' && side === -1) {
+        eyeH = 106;
+      }
+
+      if (isBlinking) {
+        eyeH = Math.max(10, eyeH * (1 - blinkProgress * 0.92));
+      }
+
+      // Outer phosphor glow
+      faceCtx.shadowColor = glowColor;
+      faceCtx.shadowBlur = 36 * currentCustom.eyeLuminescence;
+      faceCtx.fillStyle = glowColor;
+      drawRoundedRect(faceCtx, -eyeW / 2, -eyeH / 2, eyeW, eyeH, 52);
+      faceCtx.fill();
+
+      // Inner bright core
+      faceCtx.shadowBlur = 14;
+      faceCtx.fillStyle = coreWhite;
+      drawRoundedRect(
+        faceCtx,
+        -eyeW * 0.42,
+        -eyeH * 0.42,
+        eyeW * 0.84,
+        eyeH * 0.84,
+        44
+      );
+      faceCtx.fill();
+
+      if (eyeH > 40) {
+        faceCtx.shadowBlur = 0;
+        faceCtx.fillStyle = glowColor;
+        faceCtx.beginPath();
+        faceCtx.arc(smoothEyeX * 0.16, smoothEyeY * 0.16, 24, 0, Math.PI * 2);
+        faceCtx.fill();
+
+        // Dual specular catchlights
+        faceCtx.fillStyle = '#ffffff';
+        faceCtx.beginPath();
+        faceCtx.arc(side * 18, -22, 12, 0, Math.PI * 2);
+        faceCtx.fill();
+
+        faceCtx.beginPath();
+        faceCtx.arc(-side * 15, 20, 6, 0, Math.PI * 2);
+        faceCtx.fill();
+
+        // Warm lower-lid smile curve
+        if (smoothSmile > 0.4 && state !== 'LISTENING') {
+          faceCtx.fillStyle = '#070d1e';
+          faceCtx.beginPath();
+          faceCtx.ellipse(
+            0,
+            eyeH * 0.58,
+            eyeW * 0.64,
+            eyeH * 0.27 * smoothSmile,
+            0,
+            0,
+            Math.PI * 2
+          );
+          faceCtx.fill();
+        }
+      }
+
+      faceCtx.restore();
+    };
+
+    drawEye(-1);
+    drawEye(1);
+
+    // 3. Cheek Blushes / Acoustic Indicators
+    for (const side of [-1, 1] as const) {
+      const bx = W * 0.5 + side * 295 + smoothEyeX * 0.5;
+      const by = H * 0.65 + smoothEyeY * 0.4;
+      const blushGrad = faceCtx.createRadialGradient(bx, by, 2, bx, by, 48);
+      if (state === 'LISTENING') {
+        blushGrad.addColorStop(0, 'rgba(52, 211, 153, 0.45)');
+      } else {
+        blushGrad.addColorStop(0, softGlow);
+      }
+      blushGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      faceCtx.fillStyle = blushGrad;
+      faceCtx.beginPath();
+      faceCtx.arc(bx, by, 48, 0, Math.PI * 2);
+      faceCtx.fill();
+    }
+
+    // 4. Expressive Smiling & Talking Mouth
+    const mx = W * 0.5 + smoothEyeX * 0.45;
+    const my = H * 0.74 + smoothEyeY * 0.35;
+
+    faceCtx.save();
+    faceCtx.translate(mx, my);
+    faceCtx.shadowColor = glowColor;
+    faceCtx.shadowBlur = 26 * currentCustom.eyeLuminescence;
+
+    if (state === 'SPEAKING' || smoothMouthOpen > 0.045) {
+      const mouthW = 74 + audio.midEnergy * 48 + smoothSmile * 18;
+      const mouthH = Math.max(16, smoothMouthOpen * 82);
+
+      faceCtx.fillStyle = '#040711';
+      faceCtx.strokeStyle = coreWhite;
+      faceCtx.lineWidth = 12;
+      faceCtx.lineJoin = 'round';
+
+      faceCtx.beginPath();
+      faceCtx.moveTo(-mouthW, -mouthH * 0.18);
+      faceCtx.quadraticCurveTo(0, mouthH * 0.12, mouthW, -mouthH * 0.18);
+      faceCtx.bezierCurveTo(
+        mouthW * 0.85,
+        mouthH * 1.15,
+        -mouthW * 0.85,
+        mouthH * 1.15,
+        -mouthW,
+        -mouthH * 0.18
+      );
+      faceCtx.closePath();
+      faceCtx.fill();
+      faceCtx.stroke();
+
+      // Harmonic vocalizer wave inside open mouth
+      faceCtx.strokeStyle = glowColor;
+      faceCtx.lineWidth = 6;
+      faceCtx.beginPath();
+      const waveSpan = mouthW * 0.68;
+      for (let x = -waveSpan; x <= waveSpan; x += 8) {
+        const norm = x / waveSpan;
+        const env = 1 - norm * norm;
+        const wy =
+          mouthH * 0.35 +
+          Math.sin(x * 0.12 + elapsed * 28) *
+            (mouthH * 0.28 * env * (0.4 + audio.highEnergy));
+        if (x === -waveSpan) faceCtx.moveTo(x, wy);
+        else faceCtx.lineTo(x, wy);
+      }
+      faceCtx.stroke();
+    } else if (state === 'THINKING' || effectiveEmotion === 'curious') {
+      faceCtx.strokeStyle = coreWhite;
+      faceCtx.lineWidth = 13;
+      faceCtx.lineCap = 'round';
+      faceCtx.beginPath();
+      faceCtx.moveTo(-40, 4);
+      faceCtx.quadraticCurveTo(-8, -10, 20, 6);
+      faceCtx.quadraticCurveTo(36, 14, 50, -2);
+      faceCtx.stroke();
+    } else {
+      // Unmistakable, warm welcoming smile!
+      const smileWidth = effectiveEmotion === 'excited' ? 92 : 80;
+      const smileDepth = effectiveEmotion === 'excited' ? 50 : 40;
+
+      faceCtx.strokeStyle = glowColor;
+      faceCtx.lineWidth = 20;
+      faceCtx.lineCap = 'round';
+      faceCtx.beginPath();
+      faceCtx.moveTo(-smileWidth, -8);
+      faceCtx.quadraticCurveTo(0, smileDepth, smileWidth, -8);
+      faceCtx.stroke();
+
+      faceCtx.strokeStyle = coreWhite;
+      faceCtx.lineWidth = 10;
+      faceCtx.beginPath();
+      faceCtx.moveTo(-smileWidth + 3, -8);
+      faceCtx.quadraticCurveTo(0, smileDepth - 2, smileWidth - 3, -8);
+      faceCtx.stroke();
+    }
+
+    faceCtx.restore();
+    faceTexture.needsUpdate = true;
   };
 
-  let nextBlinkTime = 2.8;
-  const blinkDuration = 0.14;
+  // ==========================================================================
+  // 8. CUSTOMIZATION & INTERACTIVE REACTION API
+  // ==========================================================================
+  const applyCustomization = (custom: CharacterCustomizationState) => {
+    currentCustom = { ...custom };
+    shellPrimaryMat.color.set(custom.hairPrimaryHex);
+    trimAccentMat.color.set(custom.hairAccentHex);
+    trimAccentMat.emissive.set(custom.hairAccentHex);
+
+    shellSecondaryMat.color.set(custom.outfitJacketHex);
+    darkChassisMat.color.set(custom.outlineHex);
+
+    accentGlowMat.color.set(custom.cyberAccentHex);
+    accentGlowMat.emissive.set(custom.cyberAccentHex);
+    accentGlowMat.emissiveIntensity = custom.eyeLuminescence * 1.2;
+
+    secondaryGlowMat.color.set(custom.auraRingHex);
+    secondaryGlowMat.emissive.set(custom.auraRingHex);
+    secondaryGlowMat.emissiveIntensity = custom.eyeLuminescence;
+
+    plumeMat.color.set(custom.cyberAccentHex);
+    baseRingMat.color.set(custom.auraRingHex);
+    outerPulseMat.color.set(custom.cyberAccentHex);
+  };
+
+  let lastClockElapsed = 0;
+
+  const setEmotion = (emotion: RobotEmotion) => {
+    activeEmotion = emotion;
+    reactionUntil = lastClockElapsed + 4.0;
+    if (emotion === 'excited') {
+      waveUntil = lastClockElapsed + 2.2;
+    }
+  };
+
+  const triggerWaveOrReaction = (emotion?: RobotEmotion) => {
+    if (emotion) {
+      activeEmotion = emotion;
+    } else {
+      const cycle: RobotEmotion[] = ['excited', 'happy', 'wink', 'curious', 'zen'];
+      const nextIdx = (cycle.indexOf(activeEmotion) + 1) % cycle.length;
+      activeEmotion = cycle[nextIdx];
+    }
+    reactionUntil = lastClockElapsed + 3.5;
+    waveUntil = lastClockElapsed + 2.2;
+  };
+
+  // ==========================================================================
+  // 9. REAL-TIME 60FPS KINEMATICS & ANIMATION UPDATE LOOP
+  // ==========================================================================
+  let nextBlinkTime = 2.4;
+  const blinkDuration = 0.15;
 
   const update = (
     elapsed: number,
@@ -525,182 +939,244 @@ export function createAnimeCompanion(
     pointer: { x: number; y: number },
     micLevel: number
   ) => {
-    const auraFreq = currentCustom.auraFrequency || 1.2;
+    lastClockElapsed = elapsed;
+    const auraFreq = currentCustom.auraFrequency || 1.1;
+    const isWaving = elapsed < waveUntil;
 
-    // 1. Subtle Breathing & Posture
-    const breath = Math.sin(elapsed * 2.1) * 0.016;
-    torsoGroup.position.y = breath;
-    torsoGroup.scale.set(1 + breath * 0.4, 1, 1 + breath * 0.4);
+    // 1. Zero-Gravity Hover Bobbing + Interactive Joy Hop
+    const hoverBob = Math.sin(elapsed * 2.2) * 0.032;
+    const hopBoost = isWaving
+      ? Math.abs(Math.sin((waveUntil - elapsed) * Math.PI * 2.5)) * 0.075
+      : 0;
+    torsoGroup.position.y = hoverBob + hopBoost;
+    torsoGroup.rotation.z =
+      Math.sin(elapsed * 1.1) * 0.02 - pointer.x * 0.032;
+    torsoGroup.rotation.y = THREE.MathUtils.lerp(
+      torsoGroup.rotation.y,
+      pointer.x * 0.14,
+      Math.min(1, delta * 5)
+    );
 
-    // 2. Blinking every 3 - 6 seconds
+    const plumeScale = 0.92 + Math.sin(elapsed * 18) * 0.08 + hopBoost * 1.5;
+    plumeCone.scale.set(1, plumeScale, 1);
+    thrusterRing1.scale.setScalar(0.95 + Math.sin(elapsed * 10) * 0.08);
+    thrusterRing2.scale.setScalar(0.68 + Math.cos(elapsed * 10) * 0.08);
+
+    // 2. Natural Blinking Schedule
     if (elapsed > nextBlinkTime + blinkDuration) {
-      nextBlinkTime = elapsed + 3.0 + Math.random() * 3.0;
+      nextBlinkTime = elapsed + 2.8 + Math.random() * 3.2;
     }
-    const isBlinking = elapsed >= nextBlinkTime && elapsed <= nextBlinkTime + blinkDuration;
-    leftEye.lidMesh.visible = isBlinking;
-    rightEye.lidMesh.visible = isBlinking;
-    if (isBlinking) {
-      const blinkProgress =
-        1 - Math.abs((elapsed - (nextBlinkTime + blinkDuration / 2)) / (blinkDuration / 2));
-      const lidScale = Math.max(0.1, blinkProgress * 1.28);
-      leftEye.lidMesh.scale.y = lidScale;
-      rightEye.lidMesh.scale.y = lidScale;
-    }
+    const isBlinking =
+      elapsed >= nextBlinkTime && elapsed <= nextBlinkTime + blinkDuration;
+    const blinkProgress = isBlinking
+      ? 1 -
+        Math.abs(
+          (elapsed - (nextBlinkTime + blinkDuration / 2)) / (blinkDuration / 2)
+        )
+      : 0;
 
-    // 3. State-Driven Animations
-    let targetHeadRotX = -pointer.y * 0.18 + Math.sin(elapsed * 0.9) * 0.03;
-    let targetHeadRotY = pointer.x * 0.28 + Math.cos(elapsed * 0.6) * 0.04;
-    let targetHeadRotZ = Math.sin(elapsed * 0.7) * 0.035;
-    let targetEyeScaleY = 1.0;
-    let targetBrowY = 0.105;
-    let targetBrowTilt = 0.08;
+    // 3. Render 60fps OLED Visor Face
+    renderVisorFace(
+      elapsed,
+      state,
+      audio,
+      pointer,
+      micLevel,
+      isBlinking,
+      blinkProgress
+    );
 
-    let leftShoulderX = 0.08;
-    let leftShoulderZ = 0.14;
-    let leftElbowX = -0.25;
-    let rightShoulderX = 0.08;
-    let rightShoulderZ = -0.14;
-    let rightElbowX = -0.25;
+    // 4. State-Driven Head, Ear-Antenna, and Arm Kinematics
+    let targetHeadRotX = -pointer.y * 0.2 + Math.sin(elapsed * 1.4) * 0.025;
+    let targetHeadRotY = pointer.x * 0.3 + Math.cos(elapsed * 0.9) * 0.03;
+    let targetHeadRotZ = Math.sin(elapsed * 1.1) * 0.032;
 
-    if (state === 'LISTENING') {
-      targetHeadRotZ = 0.12 + Math.sin(elapsed * 2.5) * 0.025;
+    let leftEarTilt = Math.sin(elapsed * 2.1) * 0.06;
+    let rightEarTilt = -Math.sin(elapsed * 2.1) * 0.06;
+
+    let leftShoulderX = 0.06;
+    let leftShoulderZ = 0.2;
+    let leftElbowX = -0.35;
+
+    let rightShoulderX = 0.06;
+    let rightShoulderZ = -0.2;
+    let rightElbowX = -0.35;
+    let rightHandZ = 0;
+
+    if (isWaving) {
+      targetHeadRotZ = 0.14;
+      rightShoulderX = -0.95;
+      rightShoulderZ = -0.42;
+      rightElbowX = -1.1;
+      rightHandZ = Math.sin(elapsed * 14) * 0.45;
+      leftEarTilt = 0.25 + Math.sin(elapsed * 12) * 0.15;
+      rightEarTilt = -0.25 - Math.sin(elapsed * 12) * 0.15;
+    } else if (state === 'LISTENING') {
+      targetHeadRotZ = 0.1 + Math.sin(elapsed * 2.5) * 0.02;
       targetHeadRotX = -0.05 - micLevel * 0.08;
-      targetEyeScaleY = 1.14 + micLevel * 0.12;
-      targetBrowY = 0.118;
-      targetBrowTilt = 0.02;
+      leftEarTilt = 0.26 + micLevel * 0.25;
+      rightEarTilt = -0.26 - micLevel * 0.25;
 
-      leftShoulderZ = 0.18;
-      rightShoulderZ = -0.18;
-      leftElbowX = -0.42;
-      rightElbowX = -0.42;
+      leftShoulderZ = 0.26;
+      rightShoulderZ = -0.26;
+      leftElbowX = -0.55;
+      rightElbowX = -0.55;
 
-      const pulse = 1.0 + Math.sin(elapsed * 6.5 * auraFreq) * 0.12 + micLevel * 0.35;
+      const pulse =
+        1.0 + Math.sin(elapsed * 6.5 * auraFreq) * 0.1 + micLevel * 0.28;
       baseRing.scale.setScalar(pulse);
       baseRingMat.color.setHex(0x10b981);
-      baseRingMat.opacity = 0.75 + Math.sin(elapsed * 8 * auraFreq) * 0.2;
-      outerPulseRing.scale.setScalar(1.05 + Math.cos(elapsed * 5.5 * auraFreq) * 0.15);
-      outerPulseMat.opacity = 0.55;
+      baseRingMat.opacity = 0.72;
+      outerPulseRing.scale.setScalar(
+        1.05 + Math.cos(elapsed * 5.5 * auraFreq) * 0.12
+      );
+      outerPulseMat.opacity = 0.5;
     } else if (state === 'THINKING') {
       targetHeadRotX = -0.16 + Math.sin(elapsed * 2.0) * 0.03;
-      targetHeadRotY = 0.18 * Math.sin(elapsed * 1.1);
-      targetHeadRotZ = -0.08;
-      targetBrowY = 0.112;
-      targetBrowTilt = 0.14;
+      targetHeadRotY = 0.18 * Math.sin(elapsed * 1.2);
+      targetHeadRotZ = -0.09;
+      leftEarTilt = -0.14;
+      rightEarTilt = 0.3;
 
       rightShoulderX = -0.58;
-      rightShoulderZ = -0.08;
+      rightShoulderZ = -0.05;
       rightElbowX = -1.35;
 
-      baseRing.scale.setScalar(1.0 + Math.sin(elapsed * 4.0 * auraFreq) * 0.06);
+      baseRing.scale.setScalar(
+        1.0 + Math.sin(elapsed * 4.0 * auraFreq) * 0.06
+      );
       baseRingMat.color.setHex(0xa855f7);
-      baseRingMat.opacity = 0.68;
-      outerPulseMat.opacity = 0.45;
+      baseRingMat.opacity = 0.65;
+      outerPulseMat.opacity = 0.42;
     } else if (state === 'SPEAKING') {
       const voiceAmp = audio.mouthOpen;
-      targetHeadRotX = -pointer.y * 0.12 - voiceAmp * 0.09 + Math.sin(elapsed * 4.2) * 0.03;
-      targetHeadRotY = pointer.x * 0.2 + Math.sin(elapsed * 2.4) * 0.07;
+      targetHeadRotX =
+        -pointer.y * 0.12 - voiceAmp * 0.09 + Math.sin(elapsed * 4.2) * 0.03;
+      targetHeadRotY = pointer.x * 0.22 + Math.sin(elapsed * 2.4) * 0.065;
       targetHeadRotZ = Math.cos(elapsed * 2.8) * 0.05;
-      targetBrowY = 0.108 + voiceAmp * 0.015;
 
-      leftShoulderX = -0.22 - voiceAmp * 0.25;
-      leftShoulderZ = 0.22 + audio.midEnergy * 0.12;
-      leftElbowX = -0.68 - voiceAmp * 0.35;
+      leftEarTilt = voiceAmp * 0.3;
+      rightEarTilt = -voiceAmp * 0.3;
 
-      rightShoulderX = -0.28 - audio.lowEnergy * 0.28;
-      rightShoulderZ = -0.22 - voiceAmp * 0.12;
-      rightElbowX = -0.75 - audio.highEnergy * 0.35;
+      leftShoulderX = -0.26 - voiceAmp * 0.25;
+      leftShoulderZ = 0.26 + audio.midEnergy * 0.12;
+      leftElbowX = -0.7 - voiceAmp * 0.32;
 
-      const speakPulse = 1.0 + voiceAmp * 0.28;
+      rightShoulderX = -0.3 - audio.lowEnergy * 0.28;
+      rightShoulderZ = -0.26 - voiceAmp * 0.12;
+      rightElbowX = -0.78 - audio.highEnergy * 0.32;
+
+      const speakPulse = 1.0 + voiceAmp * 0.24;
       baseRing.scale.setScalar(speakPulse);
       baseRingMat.color.set(currentCustom.auraRingHex);
-      baseRingMat.opacity = 0.6 + voiceAmp * 0.38;
-      outerPulseRing.scale.setScalar(1.0 + audio.lowEnergy * 0.32);
-      outerPulseMat.opacity = 0.35 + voiceAmp * 0.4;
+      baseRingMat.opacity = 0.58 + voiceAmp * 0.35;
+      outerPulseRing.scale.setScalar(1.0 + audio.lowEnergy * 0.26);
+      outerPulseMat.opacity = 0.32 + voiceAmp * 0.35;
     } else {
-      baseRing.scale.setScalar(1.0 + Math.sin(elapsed * 2.0 * auraFreq) * 0.04);
+      baseRing.scale.setScalar(
+        1.0 + Math.sin(elapsed * 2.0 * auraFreq) * 0.04
+      );
       baseRingMat.color.set(currentCustom.auraRingHex);
       baseRingMat.opacity = 0.42;
-      outerPulseRing.scale.setScalar(1.0 + Math.cos(elapsed * 1.6 * auraFreq) * 0.04);
+      outerPulseRing.scale.setScalar(
+        1.0 + Math.cos(elapsed * 1.6 * auraFreq) * 0.04
+      );
       outerPulseMat.opacity = 0.22;
-      baseRingGroup.rotation.y = elapsed * 0.4 * auraFreq;
+      baseRingGroup.rotation.y = elapsed * 0.35 * auraFreq;
     }
 
-    const lerpFactor = Math.min(1, delta * 8.5);
-    headGroup.rotation.x = THREE.MathUtils.lerp(headGroup.rotation.x, targetHeadRotX, lerpFactor);
-    headGroup.rotation.y = THREE.MathUtils.lerp(headGroup.rotation.y, targetHeadRotY, lerpFactor);
-    headGroup.rotation.z = THREE.MathUtils.lerp(headGroup.rotation.z, targetHeadRotZ, lerpFactor);
+    const lerpFactor = Math.min(1, delta * 9.0);
+    headGroup.rotation.x = THREE.MathUtils.lerp(
+      headGroup.rotation.x,
+      targetHeadRotX,
+      lerpFactor
+    );
+    headGroup.rotation.y = THREE.MathUtils.lerp(
+      headGroup.rotation.y,
+      targetHeadRotY,
+      lerpFactor
+    );
+    headGroup.rotation.z = THREE.MathUtils.lerp(
+      headGroup.rotation.z,
+      targetHeadRotZ,
+      lerpFactor
+    );
 
-    const irisOffsetX = THREE.MathUtils.clamp(pointer.x * 0.012, -0.012, 0.012);
-    const irisOffsetY = THREE.MathUtils.clamp(pointer.y * 0.01, -0.01, 0.01);
-    leftEye.irisGroup.position.x = THREE.MathUtils.lerp(leftEye.irisGroup.position.x, irisOffsetX, lerpFactor);
-    leftEye.irisGroup.position.y = THREE.MathUtils.lerp(leftEye.irisGroup.position.y, irisOffsetY, lerpFactor);
-    rightEye.irisGroup.position.x = THREE.MathUtils.lerp(rightEye.irisGroup.position.x, irisOffsetX, lerpFactor);
-    rightEye.irisGroup.position.y = THREE.MathUtils.lerp(rightEye.irisGroup.position.y, irisOffsetY, lerpFactor);
+    leftEar.antennaPivot.rotation.z = THREE.MathUtils.lerp(
+      leftEar.antennaPivot.rotation.z,
+      leftEarTilt,
+      lerpFactor
+    );
+    rightEar.antennaPivot.rotation.z = THREE.MathUtils.lerp(
+      rightEar.antennaPivot.rotation.z,
+      rightEarTilt,
+      lerpFactor
+    );
 
-    leftEye.eyeGroup.scale.y = THREE.MathUtils.lerp(leftEye.eyeGroup.scale.y, targetEyeScaleY, lerpFactor);
-    rightEye.eyeGroup.scale.y = THREE.MathUtils.lerp(rightEye.eyeGroup.scale.y, targetEyeScaleY, lerpFactor);
+    leftArm.shoulderGroup.rotation.x = THREE.MathUtils.lerp(
+      leftArm.shoulderGroup.rotation.x,
+      leftShoulderX,
+      lerpFactor
+    );
+    leftArm.shoulderGroup.rotation.z = THREE.MathUtils.lerp(
+      leftArm.shoulderGroup.rotation.z,
+      leftShoulderZ,
+      lerpFactor
+    );
+    leftArm.elbowGroup.rotation.x = THREE.MathUtils.lerp(
+      leftArm.elbowGroup.rotation.x,
+      leftElbowX,
+      lerpFactor
+    );
 
-    leftEye.brow.position.y = THREE.MathUtils.lerp(leftEye.brow.position.y, targetBrowY, lerpFactor);
-    rightEye.brow.position.y = THREE.MathUtils.lerp(rightEye.brow.position.y, targetBrowY, lerpFactor);
-    leftEye.brow.rotation.z = THREE.MathUtils.lerp(leftEye.brow.rotation.z, targetBrowTilt, lerpFactor);
-    rightEye.brow.rotation.z = THREE.MathUtils.lerp(rightEye.brow.rotation.z, -targetBrowTilt, lerpFactor);
+    rightArm.shoulderGroup.rotation.x = THREE.MathUtils.lerp(
+      rightArm.shoulderGroup.rotation.x,
+      rightShoulderX,
+      lerpFactor
+    );
+    rightArm.shoulderGroup.rotation.z = THREE.MathUtils.lerp(
+      rightArm.shoulderGroup.rotation.z,
+      rightShoulderZ,
+      lerpFactor
+    );
+    rightArm.elbowGroup.rotation.x = THREE.MathUtils.lerp(
+      rightArm.elbowGroup.rotation.x,
+      rightElbowX,
+      lerpFactor
+    );
+    rightArm.handGroup.rotation.z = THREE.MathUtils.lerp(
+      rightArm.handGroup.rotation.z,
+      rightHandZ,
+      lerpFactor * 1.4
+    );
 
-    // 4. Real-Time Mouth & Jaw Lip-Sync Morphing
-    const openAmount = state === 'SPEAKING' ? Math.max(0.06, audio.mouthOpen) : 0.0;
-    if (openAmount > 0.03) {
-      mouthCavity.visible = true;
-      const mouthWidth = 0.85 + audio.midEnergy * 0.45;
-      const mouthHeight = Math.min(1.45, 0.15 + openAmount * 1.35);
-      mouthCavity.scale.set(mouthWidth, mouthHeight, 1);
-      mouthLine.scale.x = 0.6 + openAmount * 0.5;
-      mouthLine.position.y = openAmount * 0.022;
-      chinMesh.position.y = -0.15 - openAmount * 0.028;
-    } else {
-      mouthCavity.visible = false;
-      mouthLine.scale.x = 1.0;
-      mouthLine.position.y = 0;
-      chinMesh.position.y = -0.15;
-    }
+    haloGroup.rotation.z = elapsed * 0.32 * auraFreq;
+    coreMesh.rotation.y = elapsed * 1.8;
+    coreMesh.rotation.x = elapsed * 1.1;
+    gyroOuter.rotation.z = -elapsed * 1.4;
+    gyroOuter.rotation.x = Math.sin(elapsed * 1.5) * 0.45;
 
-    // 5. Arm Articulation
-    leftArm.shoulderGroup.rotation.x = THREE.MathUtils.lerp(leftArm.shoulderGroup.rotation.x, leftShoulderX, lerpFactor);
-    leftArm.shoulderGroup.rotation.z = THREE.MathUtils.lerp(leftArm.shoulderGroup.rotation.z, leftShoulderZ, lerpFactor);
-    leftArm.elbowGroup.rotation.x = THREE.MathUtils.lerp(leftArm.elbowGroup.rotation.x, leftElbowX, lerpFactor);
-
-    rightArm.shoulderGroup.rotation.x = THREE.MathUtils.lerp(rightArm.shoulderGroup.rotation.x, rightShoulderX, lerpFactor);
-    rightArm.shoulderGroup.rotation.z = THREE.MathUtils.lerp(rightArm.shoulderGroup.rotation.z, rightShoulderZ, lerpFactor);
-    rightArm.elbowGroup.rotation.x = THREE.MathUtils.lerp(rightArm.elbowGroup.rotation.x, rightElbowX, lerpFactor);
-
-    // 6. Hair Secondary Motion Sway
-    for (const h of hairSpikes) {
-      h.mesh.rotation.z = h.baseRotZ + Math.sin(elapsed * 2.2 + h.phase) * 0.028;
-      h.mesh.rotation.x = h.baseRotX + Math.cos(elapsed * 1.8 + h.phase) * 0.02;
-    }
-
-    // 7. Cyber Halo & Thinking Particle Orbit
-    haloGroup.rotation.z = elapsed * 0.35 * auraFreq;
-    coreMesh.rotation.y = elapsed * 1.4;
     const baseLum = currentCustom.eyeLuminescence;
     const coreGlow =
       state === 'SPEAKING'
-        ? baseLum * 1.3 + audio.mouthOpen * 1.4
-        : baseLum + Math.sin(elapsed * 3 * auraFreq) * 0.25;
-    cyberTrimMat.emissiveIntensity = coreGlow;
+        ? baseLum * 1.35 + audio.mouthOpen * 1.5
+        : baseLum + Math.sin(elapsed * 3.0 * auraFreq) * 0.25;
+    accentGlowMat.emissiveIntensity = coreGlow;
 
     const showThinkingOrbit = state === 'THINKING';
     thinkingGroup.visible = showThinkingOrbit;
     if (showThinkingOrbit) {
       thinkingGroup.rotation.y = elapsed * 2.6;
-      thinkingGroup.rotation.z = Math.sin(elapsed * 1.5) * 0.18;
+      thinkingGroup.rotation.z = Math.sin(elapsed * 1.5) * 0.16;
       orbitNodes.forEach((n, idx) => {
-        n.position.y = Math.sin(elapsed * 4 + idx) * 0.07;
+        n.position.y = Math.sin(elapsed * 4 + idx) * 0.05;
         n.rotation.x = elapsed * 3;
       });
     }
   };
 
   const dispose = () => {
-    gradientMap.dispose();
+    faceTexture.dispose();
     root.traverse((obj) => {
       if (obj instanceof THREE.Mesh) {
         obj.geometry.dispose();
@@ -713,5 +1189,12 @@ export function createAnimeCompanion(
     });
   };
 
-  return { root, applyCustomization, update, dispose };
+  return {
+    root,
+    applyCustomization,
+    setEmotion,
+    triggerWaveOrReaction,
+    update,
+    dispose,
+  };
 }

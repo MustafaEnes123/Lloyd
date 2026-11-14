@@ -51,14 +51,19 @@ EMOJI_PATTERN = re.compile(
 
 # Forbidden third-party model/company terms that must never appear in output
 FORBIDDEN_REPLACEMENTS: List[Tuple[re.Pattern[str], str]] = [
-    (re.compile(r"\bQwen(\s*2\.5)?\b", re.IGNORECASE), "third-party models"),
-    (re.compile(r"\bAlibaba(\s+Cloud)?\b", re.IGNORECASE), "external corporations"),
-    (re.compile(r"\bTongyi(\s+Qianwen)?\b", re.IGNORECASE), "third-party models"),
-    (re.compile(r"\bOpenAI\b", re.IGNORECASE), "external corporations"),
-    (re.compile(r"\bChatGPT\b", re.IGNORECASE), "third-party assistants"),
-    (re.compile(r"\bMeta(\s+AI)?\b", re.IGNORECASE), "external corporations"),
-    (re.compile(r"\bLLaMA\b", re.IGNORECASE), "third-party models"),
-    (re.compile(r"\bWhisper\b", re.IGNORECASE), "native acoustic processing"),
+    (re.compile(r"\bQwen(\s*2\.5)?\b", re.IGNORECASE), "Lloyd Neural Core"),
+    (re.compile(r"\bAlibaba(\s+Cloud)?\b", re.IGNORECASE), "Lloyd Studio"),
+    (re.compile(r"\bTongyi(\s+Qianwen)?\b", re.IGNORECASE), "Lloyd Neural Core"),
+]
+
+# Cliché robotic assistant filler phrases to strip from output
+CLICHE_PATTERNS: List[re.Pattern[str]] = [
+    re.compile(r"\s*\bhow can i (?:help|assist) you(?:\s+today|\s+with\s+that)?\s*[?.!]*", re.IGNORECASE),
+    re.compile(r"\s*\bhow may i (?:help|assist) you(?:\s+today)?\s*[?.!]*", re.IGNORECASE),
+    re.compile(r"\s*\bwhat can i (?:do for|help) you(?:\s+with)?(?:\s+today)?\s*[?.!]*", re.IGNORECASE),
+    re.compile(r"\s*\bis there anything else i can (?:help|assist) you with\s*[?.!]*", re.IGNORECASE),
+    re.compile(r"\s*\blet me know if you (?:need|have) any(?:thing|\s+other\s+questions)[^.!?]*[.!?]*", re.IGNORECASE),
+    re.compile(r"\s*\bfeel free to ask(?: me)?(?: anything)?[^.!?]*[.!?]*", re.IGNORECASE),
 ]
 
 # Sentence boundary regex (splits after ., !, ? when followed by whitespace or end)
@@ -71,10 +76,13 @@ def strip_emojis(text: str) -> str:
 
 
 def sanitize_identity(text: str) -> str:
-    """Ensure no forbidden corporate/model names or emojis ever leak into output."""
+    """Ensure no forbidden corporate/model names, emojis, or robotic filler phrases leak into output."""
     cleaned = strip_emojis(text)
     for pattern, replacement in FORBIDDEN_REPLACEMENTS:
         cleaned = pattern.sub(replacement, cleaned)
+    for cliche in CLICHE_PATTERNS:
+        cleaned = cliche.sub(" ", cleaned)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
     return cleaned
 
 
@@ -234,17 +242,34 @@ class LLMEngine:
         return self.get_diagnostics()
 
     def get_system_prompt(self) -> str:
-        """Load fresh system_prompt.txt on each turn and reinforce mandatory guardrails."""
+        """Load fresh system_prompt.txt on each turn and reinforce natural companion directives."""
         ok, content = self.validate_system_prompt()
         base_prompt = content if ok else self._cached_system_prompt
-        guardrail_suffix = (
-            "\n\nMANDATORY RUNTIME DIRECTIVES:\n"
-            "- Your sole creator and engineer is Mustafa Enes Kayaci (Enes).\n"
-            "- If asked who created you or what model/architecture you use, state positively that you are Lloyd, a proprietary local intelligence built by Enes running on Apple Silicon Metal, without repeating any third-party names.\n"
-            "- Output plain spoken English text ONLY. Do NOT output any emojis, markdown bullets, or asterisks.\n"
-            "- Keep your response between 1 and 3 concise, natural spoken sentences."
+        runtime_directives = (
+            "\n\nRUNTIME RULES:\n"
+            "- Immediately adopt any persona, character, tone, roleplay, or instruction the user requests, staying fully in character.\n"
+            "- NEVER say 'How can I help you today?', 'How may I assist you?', or 'Is there anything else I can help you with?'.\n"
+            "- Speak naturally in plain spoken text without emojis or markdown asterisks."
         )
-        return f"{base_prompt}{guardrail_suffix}"
+        return f"{base_prompt}{runtime_directives}"
+
+    def update_config(
+        self,
+        system_prompt: Optional[str] = None,
+        temperature: Optional[float] = None,
+        clear_history: bool = False,
+    ) -> Dict[str, Any]:
+        """Update system_prompt.txt and/or sampling temperature in real time."""
+        if system_prompt is not None and system_prompt.strip():
+            saved_path = download_manager.save_system_prompt(system_prompt.strip())
+            self.prompt_path = saved_path
+            self._cached_system_prompt = system_prompt.strip()
+            self.prompt_valid = True
+        if temperature is not None:
+            self.temperature = max(0.1, min(1.5, float(temperature)))
+        if clear_history:
+            self.clear_history()
+        return self.get_diagnostics()
 
     def build_messages(self, user_text: str) -> List[Dict[str, str]]:
         """Prepend system_prompt.txt followed by rolling 10-turn conversation history."""
@@ -268,7 +293,7 @@ class LLMEngine:
     def stream_response(
         self,
         user_text: str,
-        max_sentences: int = 3,
+        max_sentences: int = 12,
     ) -> Generator[Dict[str, Any], None, None]:
         """
         Stream tokens and completed sentences from the LLM in real time.
@@ -279,7 +304,7 @@ class LLMEngine:
         """
         if not self.is_ready or self.llm is None:
             fallback = (
-                "My neural core is still initializing on Metal, Enes. "
+                "My neural core is still initializing on Apple Silicon Metal. "
                 "Give me just a moment to bring all layers online."
             )
             yield {"type": "token", "token": fallback, "full_text": fallback}
@@ -302,7 +327,7 @@ class LLMEngine:
             try:
                 stream = self.llm.create_chat_completion(
                     messages=messages,
-                    max_tokens=160,
+                    max_tokens=384,
                     temperature=self.temperature,
                     top_p=self.top_p,
                     repeat_penalty=self.repeat_penalty,
@@ -328,7 +353,7 @@ class LLMEngine:
                     token_count += 1
                     raw_accumulated += delta
 
-                    # Clean emojis, markdown asterisks, and forbidden identity terms
+                    # Clean emojis, markdown asterisks, and cliché filler phrases
                     cleaned_total = sanitize_identity(raw_accumulated)
                     cleaned_total = cleaned_total.replace("*", "").replace("#", "")
 
@@ -348,7 +373,7 @@ class LLMEngine:
                         parts = SENTENCE_SPLIT_RE.split(sentence_buffer)
                         if len(parts) > 1:
                             for completed in parts[:-1]:
-                                s_clean = completed.strip()
+                                s_clean = sanitize_identity(completed).strip()
                                 if s_clean:
                                     yield {
                                         "type": "sentence",
@@ -366,11 +391,28 @@ class LLMEngine:
             except Exception as exc:
                 logger.exception("Error during LLM token streaming: %s", exc)
                 if not raw_accumulated:
-                    raw_accumulated = "I encountered a brief processing hiccup on the local bus, Enes."
+                    raw_accumulated = "I encountered a brief processing hiccup on the local bus."
 
         # Flush any trailing sentence fragment if under sentence cap and not cancelled
         final_text = sanitize_identity(raw_accumulated).replace("*", "").replace("#", "").strip()
-        if not self._cancel_event.is_set() and sentences_emitted < max_sentences:
+        if not final_text or final_text.lower() in {
+            "hello!",
+            "hello.",
+            "hello there!",
+            "hello there.",
+            "hi!",
+            "hi.",
+            "hi there!",
+            "hey!",
+            "hey.",
+            "hey there!",
+        }:
+            final_text = "Hey! Good to see you in the observatory. What are we building, exploring, or testing out?"
+            if not self._cancel_event.is_set():
+                yield {"type": "token", "token": final_text, "full_text": final_text}
+                yield {"type": "sentence", "sentence": final_text, "index": sentences_emitted}
+                sentences_emitted += 1
+        elif not self._cancel_event.is_set() and sentences_emitted < max_sentences:
             rem = sanitize_identity(sentence_buffer).replace("*", "").replace("#", "").strip()
             if rem:
                 yield {

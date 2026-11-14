@@ -7,17 +7,15 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['-apple-system', 'BlinkMacSystemFont', 'SF Pro Display', 'Inter', 'system-ui', 'sans-serif'],
-        mono: ['SF Mono', 'JetBrains Mono', 'Menlo', 'monospace'],
+        sans: ['"Inter"', '-apple-system', 'BlinkMacSystemFont', '"SF Pro Display"', '"SF Pro Text"', 'system-ui', 'sans-serif'],
+        mono: ['"JetBrains Mono"', '"SF Mono"', 'Menlo', 'monospace'],
       },
       colors: {
-        cyber: {
-          bg: '#060811',
-          panel: 'rgba(13, 18, 34, 0.72)',
-          cyan: '#00f0ff',
-          magenta: '#ff2a85',
-          violet: '#7c3aed',
-          emerald: '#10b981',
+        cosmos: {
+          void: '#03050a',
+          surface: 'rgba(10, 14, 24, 0.76)',
+          elevated: 'rgba(17, 23, 38, 0.82)',
+          border: 'rgba(255, 255, 255, 0.08)',
         },
       },
     },

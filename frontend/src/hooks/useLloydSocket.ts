@@ -15,6 +15,7 @@ export interface EngineDiag {
   metal_gpu_offload?: boolean;
   n_gpu_layers?: number;
   context_window?: number;
+  temperature?: number;
   sample_rate_hz?: number;
   vad_engine?: string;
   phonemizer?: string;
@@ -149,7 +150,7 @@ export function useLloydSocket() {
   const [health, setHealth] = useState<HealthSnapshot | null>(null);
   const [hardware, setHardware] = useState<HardwareTelemetry | null>(null);
   const [liveSubtitle, setLiveSubtitle] = useState<string>(
-    'Systems initialized on Apple Silicon Metal. Ready when you are, Enes.'
+    'Systems initialized on Apple Silicon Metal. Ready when you are.'
   );
   const [lastUserTranscript, setLastUserTranscript] = useState<string>('');
   const [dialogueLog, setDialogueLog] = useState<DialogueEntry[]>([]);
@@ -160,6 +161,13 @@ export function useLloydSocket() {
     highEnergy: 0,
     frequencyBins: new Array(24).fill(0),
   });
+  const [ttsMuted, setTtsMutedState] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('lloyd_tts_muted') === 'true';
+    } catch {
+      return false;
+    }
+  });
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
@@ -169,10 +177,15 @@ export function useLloydSocket() {
   const activeSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const backendDoneRef = useRef<boolean>(true);
   const companionStateRef = useRef<CompanionState>('IDLE');
+  const ttsMutedRef = useRef<boolean>(ttsMuted);
 
   useEffect(() => {
     companionStateRef.current = companionState;
   }, [companionState]);
+
+  useEffect(() => {
+    ttsMutedRef.current = ttsMuted;
+  }, [ttsMuted]);
 
   const ensureAudioContext = useCallback((): AudioContext => {
     if (!audioCtxRef.current) {
@@ -206,8 +219,33 @@ export function useLloydSocket() {
     }
   }, []);
 
+  const setTtsMuted = useCallback(
+    (muted: boolean) => {
+      setTtsMutedState(muted);
+      ttsMutedRef.current = muted;
+      try {
+        localStorage.setItem('lloyd_tts_muted', muted ? 'true' : 'false');
+      } catch {
+        // Ignore storage errors
+      }
+      if (muted) {
+        stopAllPlayback();
+        if (backendDoneRef.current) {
+          setCompanionState('IDLE');
+        }
+      }
+    },
+    [stopAllPlayback]
+  );
+
   const schedulePcmPlayback = useCallback(
     (pcmBase64: string, sampleRate = 22050) => {
+      if (ttsMutedRef.current) {
+        if (backendDoneRef.current) {
+          setCompanionState('IDLE');
+        }
+        return;
+      }
       const ctx = ensureAudioContext();
       const analyser = analyserRef.current;
       if (!analyser) return;
@@ -426,7 +464,7 @@ export function useLloydSocket() {
 
             case 'history_cleared':
               setDialogueLog([]);
-              setLiveSubtitle('Conversation memory cleared. Ready for a fresh start, Enes.');
+              setLiveSubtitle('Conversation memory cleared. Ready for a fresh start.');
               break;
           }
         } catch {
@@ -594,6 +632,27 @@ export function useLloydSocket() {
     return null;
   }, [refreshDiagnostics, stopAllPlayback]);
 
+  const updatePersona = useCallback(
+    async (prompt?: string, temperature?: number, clearHistoryAfter = false) => {
+      const res = await fetch(`${BACKEND_HTTP}/api/persona`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt,
+          temperature,
+          clear_history: clearHistoryAfter,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        await refreshDiagnostics();
+        return data;
+      }
+      return null;
+    },
+    [refreshDiagnostics]
+  );
+
   return {
     connected,
     companionState,
@@ -604,6 +663,8 @@ export function useLloydSocket() {
     lastUserTranscript,
     dialogueLog,
     audioMetrics,
+    ttsMuted,
+    setTtsMuted,
     sendText,
     sendAudioChunk,
     startPushToTalk,
@@ -613,5 +674,6 @@ export function useLloydSocket() {
     refreshDiagnostics,
     verifyModels,
     purgeModels,
+    updatePersona,
   };
 }

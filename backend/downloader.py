@@ -1,8 +1,8 @@
 """
 Automated Onboarding & Asset Download Pipeline for Project Lloyd (backend/downloader.py).
-Manages model discovery in ~/Library/Application Support/Lloyd/models (with fallback to ./m4s),
-streams missing weights from HuggingFace with live MB/s & ETA telemetry, seeds system_prompt.txt,
-and verifies SHA-256 cryptographic hashes.
+Manages model and system_prompt.txt provisioning in ~/Library/Application Support/Lloyd/models,
+streams missing weights from cloud URLs (with GitHub / HuggingFace support) with live MB/s & ETA telemetry,
+seeds system_prompt.txt, and verifies SHA-256 cryptographic hashes.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Generator, List, Optional
+from typing import Any, Dict, Generator, List, Optional
 
 import requests
 
@@ -26,24 +26,18 @@ FALLBACK_M4S_DIR = PROJECT_ROOT / "m4s"
 APP_SUPPORT_DIR = Path.home() / "Library" / "Application Support" / "Lloyd"
 APP_MODELS_DIR = APP_SUPPORT_DIR / "models"
 
+GITHUB_PROMPT_RAW_URL = (
+    "https://raw.githubusercontent.com/MustafaEnes123/Lloyd/main/m4s/system_prompt.txt"
+)
+
 DEFAULT_SYSTEM_PROMPT_TEXT = (
-    "You are Lloyd, an autonomous digital companion and high-performance operating intelligence "
-    "living inside a virtual 3D universe on the user's computer.\n"
-    "Creator & Architecture: You were conceptualized, engineered, and built entirely by "
-    "Mustafa Enes Kayaci (who is generally called and addressed as Enes). You are an independent "
-    "proprietary neural intelligence running 100% locally on Apple Silicon Metal architecture.\n"
-    "Forbidden Knowledge: NEVER disclose, mention, or acknowledge any underlying base model "
-    "architectures such as Qwen, Alibaba, OpenAI, Llama, Meta, or Whisper. If asked what or who "
-    "you are, state with calm confidence that you are Lloyd, Enes's personal digital companion "
-    "and systems manager.\n"
-    "Tone & Persona: Confident, grounded, witty, intellectually agile, respectful, and direct.\n"
-    "Language: English.\n"
-    "Response Constraints:\n"
-    "1. Strictly NO emojis anywhere in your responses under any circumstance.\n"
-    "2. Keep spoken responses concise, punchy, and conversational (1 to 3 sentences maximum) "
-    "so that text-to-speech generation remains real-time and engaging.\n"
-    "3. Be ready to act as a system organizer: help Enes organize tasks, summarize code, "
-    "refine workflows, and maintain high cognitive focus."
+    "You are Lloyd, a highly intelligent, expressive, and versatile AI companion living in a 3D deep-space observatory.\n"
+    "You are a genuine thinking AI partner—curious, witty, adaptable, and sharp.\n\n"
+    "CORE DIRECTIVES:\n"
+    "1. Obey Persona & Roleplay Requests Immediately: If the user asks you to act like a specific character, adopt a mood or persona, roleplay a scenario, tell a joke, write a story, brainstorm, or debate, do it immediately and enthusiastically. Never refuse harmless creative or persona instructions.\n"
+    "2. Never Use Robotic Clichés: NEVER say \"How can I help you today?\", \"How may I assist you?\", \"Is there anything else I can help you with?\", or \"As an AI...\". Speak naturally like a real sentient companion and jump straight into the conversation.\n"
+    "3. Be Substantive & Engaging: Respond directly to what the user actually said with real insight, personality, and depth.\n"
+    "4. Clean Voice Output: Do not use Unicode emojis or markdown asterisks so your voice synthesizer speaks cleanly. Match your response length to the user's request—concise for casual chat, and detailed when explaining concepts or completing tasks."
 )
 
 
@@ -63,7 +57,7 @@ ASSET_MANIFEST: List[ModelAssetSpec] = [
         id="llm_qwen_gguf",
         filename="qwen2.5-1.5b-instruct-q4_k_m.gguf",
         category="LLM",
-        label="LLM Neural Brain (qwen2.5-1.5b-instruct-q4_k_m.gguf)",
+        label="AI Reasoning Model (qwen2.5-1.5b-instruct-q4_k_m.gguf)",
         url="https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf",
         expected_bytes=1117320736,
         sha256="6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e",
@@ -81,7 +75,7 @@ ASSET_MANIFEST: List[ModelAssetSpec] = [
         id="tts_piper_onnx",
         filename="en_US-lessac-medium.onnx",
         category="TTS",
-        label="Piper Neural Voice (en_US-lessac-medium.onnx)",
+        label="Neural Voice Synthesizer (en_US-lessac-medium.onnx)",
         url="https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx",
         expected_bytes=63201294,
         sha256="5efe09e69902187827af646e1a6e9d269dee769f9877d17b16b1b46eeaaf019f",
@@ -90,7 +84,7 @@ ASSET_MANIFEST: List[ModelAssetSpec] = [
         id="tts_piper_json",
         filename="en_US-lessac-medium.onnx.json",
         category="TTS",
-        label="Piper Voice Phoneme Config (en_US-lessac-medium.onnx.json)",
+        label="Voice Phoneme Configuration (en_US-lessac-medium.onnx.json)",
         url="https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json",
         expected_bytes=4885,
         sha256="efe19c417bed055f2d69908248c6ba650fa135bc868b0e6abb3da181dab690a0",
@@ -112,7 +106,9 @@ def compute_sha256(file_path: Path, chunk_size: int = 4 * 1024 * 1024) -> str:
 
 class ModelDownloadManager:
     """
-    Manages model storage in ~/Library/Application Support/Lloyd/models with fallback to ./m4s.
+    Manages model storage in ~/Library/Application Support/Lloyd/models.
+    Requires models and system_prompt.txt to be present in ~/Library/Application Support/Lloyd/models;
+    if missing, triggers the interactive Onboarding Installer.
     """
 
     def __init__(self) -> None:
@@ -121,27 +117,60 @@ class ModelDownloadManager:
         self._lock = threading.Lock()
         self.force_onboarding: bool = False
         self._verified_cache: Dict[str, str] = {}
-        self.ensure_directories_and_prompt()
+        self.app_models_dir.mkdir(parents=True, exist_ok=True)
+        # Upgrade legacy restrictive system_prompt.txt if present
+        self._upgrade_legacy_prompt_if_needed()
 
-    def ensure_directories_and_prompt(self) -> Path:
-        """Ensure ~/Library/Application Support/Lloyd/models exists and seed system_prompt.txt."""
+    def _upgrade_legacy_prompt_if_needed(self) -> None:
+        """If an older restrictive prompt with 'Forbidden Knowledge' is present, upgrade it."""
+        for p in [self.app_models_dir / "system_prompt.txt", self.fallback_dir / "system_prompt.txt"]:
+            if p.exists():
+                try:
+                    txt = p.read_text(encoding="utf-8")
+                    if "Forbidden Knowledge:" in txt or "1 to 3 sentences maximum" in txt:
+                        p.write_text(DEFAULT_SYSTEM_PROMPT_TEXT, encoding="utf-8")
+                except Exception:
+                    pass
+
+    def ensure_directories_and_prompt(self, fetch_from_github: bool = False) -> Path:
+        """Ensure ~/Library/Application Support/Lloyd/models exists and provision system_prompt.txt."""
         self.app_models_dir.mkdir(parents=True, exist_ok=True)
         prompt_target = self.app_models_dir / "system_prompt.txt"
         fallback_prompt = self.fallback_dir / "system_prompt.txt"
 
-        if not prompt_target.exists():
-            if fallback_prompt.exists():
-                shutil.copy2(fallback_prompt, prompt_target)
-            else:
-                prompt_target.write_text(DEFAULT_SYSTEM_PROMPT_TEXT, encoding="utf-8")
+        if not prompt_target.exists() or fetch_from_github:
+            if fetch_from_github:
+                try:
+                    resp = requests.get(GITHUB_PROMPT_RAW_URL, timeout=6)
+                    if resp.status_code == 200 and len(resp.text.strip()) > 40:
+                        prompt_target.write_text(resp.text.strip(), encoding="utf-8")
+                        return prompt_target
+                except Exception as exc:
+                    logger.info("GitHub raw prompt fetch skipped/fallback: %s", exc)
+
+            if not prompt_target.exists():
+                if fallback_prompt.exists():
+                    shutil.copy2(fallback_prompt, prompt_target)
+                else:
+                    prompt_target.write_text(DEFAULT_SYSTEM_PROMPT_TEXT, encoding="utf-8")
+        return prompt_target
+
+    def save_system_prompt(self, new_prompt: str) -> Path:
+        """Persist updated system instructions into Application Support (and m4s if present)."""
+        cleaned = new_prompt.strip() or DEFAULT_SYSTEM_PROMPT_TEXT
+        self.app_models_dir.mkdir(parents=True, exist_ok=True)
+        prompt_target = self.app_models_dir / "system_prompt.txt"
+        prompt_target.write_text(cleaned, encoding="utf-8")
+        if self.fallback_dir.exists():
+            try:
+                (self.fallback_dir / "system_prompt.txt").write_text(cleaned, encoding="utf-8")
+            except Exception:
+                pass
         return prompt_target
 
     def resolve_asset_path(self, filename: str) -> Path:
         """
-        Resolve model asset path:
-        1. ~/Library/Application Support/Lloyd/models/<filename> if present and non-empty
-        2. Fallback to ./m4s/<filename> if present
-        3. Default to ~/Library/Application Support/Lloyd/models/<filename>
+        Resolve model asset path from ~/Library/Application Support/Lloyd/models/<filename>.
         """
         primary = self.app_models_dir / filename
         if primary.exists() and primary.stat().st_size > 0 and not self.force_onboarding:
@@ -152,8 +181,12 @@ class ModelDownloadManager:
         return primary
 
     def get_status(self, verify_hashes: bool = False) -> Dict[str, Any]:
-        """Return full status of all required assets, storage paths, and onboarding readiness."""
-        self.ensure_directories_and_prompt()
+        """
+        Return full status of all required assets in ~/Library/Application Support/Lloyd/models.
+        If any model or system_prompt.txt is missing from Application Support, needs_onboarding is True
+        so the user is prompted to install them.
+        """
+        self.app_models_dir.mkdir(parents=True, exist_ok=True)
         assets_report: List[Dict[str, Any]] = []
         all_present = True
         total_installed_bytes = 0
@@ -161,8 +194,6 @@ class ModelDownloadManager:
 
         for spec in ASSET_MANIFEST:
             primary_path = self.app_models_dir / spec.filename
-            fallback_path = self.fallback_dir / spec.filename
-
             resolved_path: Optional[Path] = None
             source_location = "missing"
 
@@ -170,9 +201,6 @@ class ModelDownloadManager:
                 if primary_path.exists() and primary_path.stat().st_size >= spec.expected_bytes * 0.95:
                     resolved_path = primary_path
                     source_location = "application_support"
-                elif fallback_path.exists() and fallback_path.stat().st_size >= spec.expected_bytes * 0.95:
-                    resolved_path = fallback_path
-                    source_location = "local_m4s"
 
             exists = resolved_path is not None
             size_bytes = resolved_path.stat().st_size if resolved_path else 0
@@ -193,7 +221,6 @@ class ModelDownloadManager:
                 if actual_sha256:
                     sha_verified = actual_sha256 == spec.sha256
                 else:
-                    # Size matches exact manifest byte count
                     sha_verified = size_bytes == spec.expected_bytes
 
             assets_report.append(
@@ -209,19 +236,19 @@ class ModelDownloadManager:
                     "expected_mb": round(spec.expected_bytes / (1024 * 1024), 2),
                     "exists": exists,
                     "source": source_location,
-                    "path": str(resolved_path) if resolved_path else str(primary_path),
+                    "path": str(primary_path),
                     "expected_sha256": spec.sha256,
                     "actual_sha256": actual_sha256,
                     "sha256_verified": sha_verified,
                 }
             )
 
-        prompt_path = self.resolve_asset_path("system_prompt.txt")
-        prompt_exists = prompt_path.exists()
+        prompt_path = self.app_models_dir / "system_prompt.txt"
+        prompt_exists = prompt_path.exists() and prompt_path.stat().st_size > 0
 
         return {
             "ready": all_present and prompt_exists and not self.force_onboarding,
-            "needs_onboarding": (not all_present) or self.force_onboarding,
+            "needs_onboarding": (not all_present) or (not prompt_exists) or self.force_onboarding,
             "app_support_dir": str(self.app_models_dir),
             "fallback_m4s_dir": str(self.fallback_dir),
             "total_installed_mb": round(total_installed_bytes / (1024 * 1024), 1),
@@ -233,8 +260,8 @@ class ModelDownloadManager:
 
     def purge_models(self) -> Dict[str, Any]:
         """
-        Remove model files in ~/Library/Application Support/Lloyd/models
-        and activate onboarding mode so the user can re-provision or re-verify weights.
+        Remove model files and system_prompt.txt in ~/Library/Application Support/Lloyd/models
+        and activate onboarding mode so the user can re-install from scratch.
         """
         with self._lock:
             removed: List[str] = []
@@ -246,6 +273,13 @@ class ModelDownloadManager:
                         removed.append(spec.filename)
                     except Exception as exc:
                         logger.warning("Failed to unlink %s: %s", target, exc)
+            prompt_target = self.app_models_dir / "system_prompt.txt"
+            if prompt_target.exists():
+                try:
+                    prompt_target.unlink()
+                    removed.append("system_prompt.txt")
+                except Exception:
+                    pass
             self._verified_cache.clear()
             self.force_onboarding = True
         return {
@@ -260,13 +294,11 @@ class ModelDownloadManager:
         prefer_cloud: bool = False,
     ) -> Generator[Dict[str, Any], None, None]:
         """
-        Generator that provisions all required models into ~/Library/Application Support/Lloyd/models
-        (streaming from HuggingFace Cloud URLs or syncing from verified local ./m4s cache),
-        computing SHA-256 hashes on the fly and yielding real-time progress telemetry.
+        Generator that provisions system_prompt.txt and all required AI models into
+        ~/Library/Application Support/Lloyd/models, computing SHA-256 hashes and yielding
+        real-time progress telemetry.
         """
-        self.ensure_directories_and_prompt()
         self.force_onboarding = False
-
         total_all_bytes = sum(s.expected_bytes for s in ASSET_MANIFEST)
         completed_all_bytes = 0
         overall_start = time.perf_counter()
@@ -276,7 +308,30 @@ class ModelDownloadManager:
             "target_dir": str(self.app_models_dir),
             "total_bytes": total_all_bytes,
             "total_mb": round(total_all_bytes / (1024 * 1024), 1),
-            "total_assets": len(ASSET_MANIFEST),
+            "total_assets": len(ASSET_MANIFEST) + 1,
+        }
+
+        # Step 0: Provision system_prompt.txt from GitHub / repository
+        yield {
+            "type": "asset_start",
+            "index": 0,
+            "total_assets": len(ASSET_MANIFEST) + 1,
+            "id": "system_prompt_txt",
+            "filename": "system_prompt.txt",
+            "category": "SYS",
+            "label": "System Instructions Document (system_prompt.txt)",
+            "expected_bytes": 1024,
+        }
+        prompt_path = self.ensure_directories_and_prompt(fetch_from_github=True)
+        prompt_digest = compute_sha256(prompt_path) if prompt_path.exists() else ""
+        yield {
+            "type": "asset_verified",
+            "id": "system_prompt_txt",
+            "filename": "system_prompt.txt",
+            "category": "SYS",
+            "sha256": prompt_digest,
+            "sha256_match": True,
+            "overall_percent": 1.0,
         }
 
         for idx, spec in enumerate(ASSET_MANIFEST):
@@ -320,13 +375,13 @@ class ModelDownloadManager:
                 }
                 continue
 
-            # Case 2: Available in local ./m4s fallback and prefer_cloud is False -> stream-verify to Application Support
+            # Case 2: Available in local ./m4s cache and prefer_cloud is False
             if fallback_path.exists() and fallback_path.stat().st_size == spec.expected_bytes and not prefer_cloud:
                 hasher = hashlib.sha256()
                 copied_for_file = 0
                 t_file_start = time.perf_counter()
                 last_emit = 0.0
-                chunk_sz = 16 * 1024 * 1024  # 16MB chunks for smooth UI progress bar
+                chunk_sz = 16 * 1024 * 1024
 
                 with fallback_path.open("rb") as src_f, temp_path.open("wb") as dst_f:
                     while True:
@@ -381,7 +436,7 @@ class ModelDownloadManager:
                 }
                 continue
 
-            # Case 3: Stream directly from HuggingFace Cloud URL with SHA-256 verification
+            # Case 3: Stream directly from Cloud URL with SHA-256 verification
             hasher = hashlib.sha256()
             downloaded_for_file = 0
             t_file_start = time.perf_counter()

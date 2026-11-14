@@ -5,73 +5,103 @@ export type HairPresetId =
   | 'sakura_pink'
   | 'electric_gold';
 
+export type RobotEmotion =
+  | 'happy'
+  | 'excited'
+  | 'curious'
+  | 'wink'
+  | 'zen';
+
 export interface CharacterCustomizationState {
   hairPreset: HairPresetId;
-  hairPrimaryHex: string;
-  hairAccentHex: string;
-  eyeIrisHex: string;
-  eyeLuminescence: number; // 0.5 - 2.5
-  outfitJacketHex: string;
-  cyberAccentHex: string;
-  outlineHex: string;
-  auraRingHex: string;
-  auraFrequency: number; // 0.5 - 2.5
-  roomRimLightHex: string;
-  roomAmbientIntensity: number; // 0.4 - 1.8
+  hairPrimaryHex: string; // Primary Chassis Shell Finish
+  hairAccentHex: string;  // Secondary Chassis Trim / Ear-Pod Finish
+  eyeIrisHex: string;     // OLED Visor Eye & Smile Phosphor Color
+  eyeLuminescence: number; // 0.5 - 2.5 (OLED Visor & Core Luminance)
+  outfitJacketHex: string; // Inner Frame & Torso Armor Color
+  cyberAccentHex: string;  // Reactor Core & Thruster Accent
+  outlineHex: string;      // Panel Seam & Rim Shadow Tone
+  auraRingHex: string;     // Orbital Containment Ring & Nebula Accent
+  auraFrequency: number;   // 0.5 - 2.5 (Orbital & Thruster Pulse Rate)
+  roomRimLightHex: string; // Deep Space Rim & Planetary Atmosphere Tint
+  roomAmbientIntensity: number; // 0.4 - 1.8 (Starlight & Nebula Exposure)
 }
 
 export const HAIR_PALETTES: Record<
   HairPresetId,
-  { label: string; primary: string; accent: string; swatch: string }
+  {
+    label: string;
+    subtitle: string;
+    primary: string;
+    accent: string;
+    jacket: string;
+    eye: string;
+    swatch: string;
+  }
 > = {
   silver: {
-    label: 'Silver Frost',
-    primary: '#dbeafe',
+    label: 'Lunar Titanium',
+    subtitle: 'Aerospace Ceramic & Sky Blue',
+    primary: '#f1f5f9',
     accent: '#38bdf8',
-    swatch: 'from-slate-100 to-sky-400',
+    jacket: '#1e293b',
+    eye: '#38bdf8',
+    swatch: 'from-slate-100 via-slate-300 to-sky-400',
   },
   obsidian: {
-    label: 'Obsidian Void',
-    primary: '#1e293b',
-    accent: '#6366f1',
-    swatch: 'from-slate-800 to-indigo-500',
+    label: 'Stealth Carbon',
+    subtitle: 'Matte Obsidian & Indigo Core',
+    primary: '#1e2430',
+    accent: '#818cf8',
+    jacket: '#0f131a',
+    eye: '#60a5fa',
+    swatch: 'from-zinc-800 via-slate-800 to-indigo-400',
   },
   cyber_cyan: {
-    label: 'Cyber Cyan',
-    primary: '#00f2fe',
-    accent: '#4facfe',
-    swatch: 'from-cyan-300 to-blue-500',
+    label: 'Orbital Cobalt',
+    subtitle: 'Deep Azure & Electric Cyan',
+    primary: '#e0f2fe',
+    accent: '#00f2fe',
+    jacket: '#0f172a',
+    eye: '#00f2fe',
+    swatch: 'from-sky-100 via-cyan-300 to-blue-500',
   },
   sakura_pink: {
-    label: 'Sakura Pink',
-    primary: '#f9a8d4',
-    accent: '#f43f5e',
-    swatch: 'from-pink-300 to-rose-500',
+    label: 'Crimson Nova',
+    subtitle: 'Warm Alabaster & Coral Rose',
+    primary: '#fdf2f8',
+    accent: '#fb7185',
+    jacket: '#1f1624',
+    eye: '#fda4af',
+    swatch: 'from-rose-100 via-pink-300 to-rose-500',
   },
   electric_gold: {
-    label: 'Electric Gold',
-    primary: '#fef08a',
+    label: 'Solar Voyager',
+    subtitle: 'Champagne Alloy & Amber Gold',
+    primary: '#fefce8',
     accent: '#f59e0b',
-    swatch: 'from-yellow-200 to-amber-500',
+    jacket: '#1c1917',
+    eye: '#fbbf24',
+    swatch: 'from-amber-100 via-yellow-300 to-amber-500',
   },
 };
 
 export const DEFAULT_CUSTOMIZATION: CharacterCustomizationState = {
   hairPreset: 'silver',
-  hairPrimaryHex: '#dbeafe',
-  hairAccentHex: '#00f2fe',
-  eyeIrisHex: '#00f2fe',
-  eyeLuminescence: 1.4,
-  outfitJacketHex: '#0f172a',
-  cyberAccentHex: '#00f2fe',
-  outlineHex: '#050814',
-  auraRingHex: '#4facfe',
-  auraFrequency: 1.2,
-  roomRimLightHex: '#4facfe',
-  roomAmbientIntensity: 1.0,
+  hairPrimaryHex: '#f1f5f9',
+  hairAccentHex: '#38bdf8',
+  eyeIrisHex: '#38bdf8',
+  eyeLuminescence: 1.45,
+  outfitJacketHex: '#182030',
+  cyberAccentHex: '#38bdf8',
+  outlineHex: '#090d16',
+  auraRingHex: '#60a5fa',
+  auraFrequency: 1.1,
+  roomRimLightHex: '#38bdf8',
+  roomAmbientIntensity: 1.05,
 };
 
-const STORAGE_KEY = 'lloyd_customization_v2';
+const STORAGE_KEY = 'lloyd_customization_v3';
 
 export function loadCustomizationState(): CharacterCustomizationState {
   try {
