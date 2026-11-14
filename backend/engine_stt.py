@@ -21,7 +21,7 @@ from hardware import watchdog
 
 logger = logging.getLogger("lloyd.stt")
 
-BASE_DIR = Path("/Users/mustafaeneskayaci/Documents/coding_projects/Lloyd")
+BASE_DIR = Path(__file__).resolve().parent.parent
 M4S_DIR = BASE_DIR / "m4s"
 DEFAULT_WHISPER_PATH = download_manager.resolve_asset_path("ggml-tiny.en.bin")
 

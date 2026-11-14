@@ -29,7 +29,7 @@ from hardware import watchdog
 
 logger = logging.getLogger("lloyd.tts")
 
-BASE_DIR = Path("/Users/mustafaeneskayaci/Documents/coding_projects/Lloyd")
+BASE_DIR = Path(__file__).resolve().parent.parent
 M4S_DIR = BASE_DIR / "m4s"
 DEFAULT_ONNX_PATH = download_manager.resolve_asset_path("en_US-lessac-medium.onnx")
 DEFAULT_CONFIG_PATH = download_manager.resolve_asset_path("en_US-lessac-medium.onnx.json")

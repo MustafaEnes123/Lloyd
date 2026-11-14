@@ -21,7 +21,7 @@ import requests
 
 logger = logging.getLogger("lloyd.downloader")
 
-PROJECT_ROOT = Path("/Users/mustafaeneskayaci/Documents/coding_projects/Lloyd")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FALLBACK_M4S_DIR = PROJECT_ROOT / "m4s"
 APP_SUPPORT_DIR = Path.home() / "Library" / "Application Support" / "Lloyd"
 APP_MODELS_DIR = APP_SUPPORT_DIR / "models"

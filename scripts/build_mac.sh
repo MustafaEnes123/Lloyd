@@ -195,10 +195,8 @@ cp "${MASTER_ICON_PNG}" "${ICONSET_DIR}/icon_512x512@2x.png"
 iconutil -c icns "${ICONSET_DIR}" -o "${APP_BUNDLE}/Contents/Resources/AppIcon.icns"
 rm -rf "${ICONSET_DIR}" "${MASTER_ICON_PNG}"
 
-# Ensure ~/Library/Application Support/Lloyd/models exists with user write permissions
+# Target model vault path created on first launch by Lloyd.app
 APP_SUPPORT_MODELS="${HOME}/Library/Application Support/Lloyd/models"
-mkdir -p "${APP_SUPPORT_MODELS}"
-chmod 755 "${HOME}/Library/Application Support/Lloyd" "${APP_SUPPORT_MODELS}"
 
 # 4. Write Info.plist with custom AppIcon, microphone & Application Support access
 cat > "${APP_BUNDLE}/Contents/Info.plist" <<EOF
@@ -265,7 +263,8 @@ cat > "${NATIVE_SRC}" <<'EOF'
     }
 
     // 1. Ensure ~/Library/Application Support/Lloyd/models directory exists with 0755 permissions
-    NSString *appSupport = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/Lloyd/models"];
+    NSString *lloydSupportRoot = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/Lloyd"];
+    NSString *appSupport = [lloydSupportRoot stringByAppendingPathComponent:@"models"];
     [[NSFileManager defaultManager] createDirectoryAtPath:appSupport
                               withIntermediateDirectories:YES
                                                attributes:@{NSFilePosixPermissions: @(0755)}
@@ -274,29 +273,40 @@ cat > "${NATIVE_SRC}" <<'EOF'
     // 2. Cleanly terminate any stale daemon holding port 8000 so the fresh bundle always serves
     system("/usr/sbin/lsof -ti:8000 | /usr/bin/xargs kill -9 >/dev/null 2>&1 || true");
 
-    // 3. Locate bundled backend/app.py or workspace backend/app.py
+    // 3. Locate bundled backend/app.py
     NSString *bundleResources = [[NSBundle mainBundle] resourcePath];
     NSString *bundledBackend = [bundleResources stringByAppendingPathComponent:@"backend/app.py"];
-    NSString *workspaceBackend = @"/Users/mustafaeneskayaci/Documents/coding_projects/Lloyd/backend/app.py";
-    NSString *backendScript = [[NSFileManager defaultManager] fileExistsAtPath:bundledBackend]
-        ? bundledBackend
-        : workspaceBackend;
+    NSString *bundledReqs = [bundleResources stringByAppendingPathComponent:@"backend/requirements.txt"];
 
-    NSString *venvPython = @"/Users/mustafaeneskayaci/Documents/coding_projects/Lloyd/.venv/bin/python";
-    NSString *brewPython = @"/opt/homebrew/bin/python3.12";
-    NSString *pythonExec = [[NSFileManager defaultManager] isExecutableFileAtPath:venvPython]
-        ? venvPython
-        : ([[NSFileManager defaultManager] isExecutableFileAtPath:brewPython] ? brewPython : @"/usr/bin/python3");
+    // 4. Launch backend in background (auto-bootstrapping ~/Library/Application Support/Lloyd/venv on any new Mac)
+    NSString *supportVenvPython = [lloydSupportRoot stringByAppendingPathComponent:@"venv/bin/python"];
+    NSString *devVenvPython = @"/Users/mustafaeneskayaci/Documents/coding_projects/Lloyd/.venv/bin/python";
+
+    NSString *launchCmd = [NSString stringWithFormat:
+        @"export PATH=\"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin\"; "
+        @"export PYTHONDONTWRITEBYTECODE=1; "
+        @"export LLOYD_APP_SUPPORT_DIR=\"%@\"; "
+        @"if [ -x \"%@\" ]; then "
+        @"  exec \"%@\" -B \"%@\"; "
+        @"elif [ -x \"%@\" ]; then "
+        @"  exec \"%@\" -B \"%@\"; "
+        @"else "
+        @"  SYS_PY=$(command -v python3.12 || command -v python3.11 || command -v python3); "
+        @"  \"$SYS_PY\" -m venv \"%@/venv\" && "
+        @"  \"%@/venv/bin/pip\" install --upgrade pip && "
+        @"  \"%@/venv/bin/pip\" install -r \"%@\" && "
+        @"  exec \"%@/venv/bin/python\" -B \"%@\"; "
+        @"fi",
+        appSupport,
+        devVenvPython, devVenvPython, bundledBackend,
+        supportVenvPython, supportVenvPython, bundledBackend,
+        lloydSupportRoot, lloydSupportRoot, lloydSupportRoot, bundledReqs, lloydSupportRoot, bundledBackend
+    ];
 
     self.backendTask = [[NSTask alloc] init];
-    self.backendTask.executableURL = [NSURL fileURLWithPath:pythonExec];
-    self.backendTask.arguments = @[backendScript];
-    self.backendTask.currentDirectoryURL = [NSURL fileURLWithPath:[backendScript stringByDeletingLastPathComponent]];
-
-    NSMutableDictionary *env = [[[NSProcessInfo processInfo] environment] mutableCopy];
-    env[@"PATH"] = @"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
-    env[@"LLOYD_APP_SUPPORT_DIR"] = appSupport;
-    self.backendTask.environment = env;
+    self.backendTask.executableURL = [NSURL fileURLWithPath:@"/bin/zsh"];
+    self.backendTask.arguments = @[@"-c", launchCmd];
+    self.backendTask.currentDirectoryURL = [NSURL fileURLWithPath:lloydSupportRoot];
 
     NSError *err = nil;
     [self.backendTask launchAndReturnError:&err];
@@ -413,11 +423,20 @@ clang -O2 -arch arm64 -fobjc-arc \
 rm -f "${NATIVE_SRC}"
 chmod +x "${APP_BUNDLE}/Contents/MacOS/${APP_NAME}"
 
+# Strip extended attributes & .DS_Store, then seal the entire .app bundle with codesign
+# (Prevents macOS Gatekeeper "is damaged and can't be opened" / errSecCSResourcesNotFound)
+find "${APP_BUNDLE}" -name ".DS_Store" -delete
+find "${APP_BUNDLE}" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+xattr -cr "${APP_BUNDLE}"
+codesign --force --deep --sign - "${APP_BUNDLE}"
+codesign --verify --deep --strict --verbose=2 "${APP_BUNDLE}"
+
 # 6. Prepare Drag-and-Drop DMG Staging Directory (Lloyd.app -> /Applications)
 echo "[5/6] Configuring DMG drag-and-drop staging folder (Lloyd.app -> /Applications)..."
-mkdir -p "${STAGING_DIR}/.background"
+mkdir -p "${STAGING_DIR}"
 cp -R "${APP_BUNDLE}" "${STAGING_DIR}/${APP_NAME}.app"
 ln -s /Applications "${STAGING_DIR}/Applications"
+xattr -cr "${STAGING_DIR}/${APP_NAME}.app"
 
 cat > "${STAGING_DIR}/INSTALL_GUIDE.txt" <<EOF
 ===================================================================
@@ -438,6 +457,7 @@ rm -f "${DMG_PATH}" "${DIST_DIR}/app.dmg"
 hdiutil create -volname "Lloyd Installer" \
   -srcfolder "${STAGING_DIR}" \
   -ov -format UDZO "${DMG_PATH}" >/dev/null
+codesign --force --sign - "${DMG_PATH}"
 cp "${DMG_PATH}" "${DIST_DIR}/app.dmg"
 rm -rf "${STAGING_DIR}"
 
